@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "kashflow": {
+      "command": "${CURSOR_PLUGIN_ROOT}/scripts/kashflow-mcp",
+      "env": {
+        "KashFlow__UserName": "${KASHFLOW_USERNAME}",
+        "KashFlow__Password": "${KASHFLOW_PASSWORD}",
+        "KashFlow__ReadOnly": "${KASHFLOW_READ_ONLY}"
+      }
+    }
+  }
+}

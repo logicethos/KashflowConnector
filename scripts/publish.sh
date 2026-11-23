@@ -45,5 +45,25 @@ PY
   echo "  packed $zip_path"
 done
 
-echo "Done. Binaries in $PUBLISH_ROOT ; zips in $RELEASE_ROOT"
+echo "Writing SHA256SUMS..."
+(
+  cd "$RELEASE_ROOT"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum KashflowMCP-*.zip | sort -k2 > SHA256SUMS
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 KashflowMCP-*.zip | sort -k2 > SHA256SUMS
+  else
+    python3 - <<'PY'
+import hashlib, pathlib
+root = pathlib.Path(".")
+lines = []
+for path in sorted(root.glob("KashflowMCP-*.zip")):
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    lines.append(f"{digest}  {path.name}")
+pathlib.Path("SHA256SUMS").write_text("\n".join(lines) + "\n")
+PY
+  fi
+)
+
+echo "Done. Binaries in $PUBLISH_ROOT ; zips and SHA256SUMS in $RELEASE_ROOT"
 ls -lh "$RELEASE_ROOT"

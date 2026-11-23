@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# Downloads the self-contained KashflowMCP build for this machine from GitHub
+# Releases, checks SHA256SUMS, and execs it. stdout is reserved for MCP JSON-RPC.
+# No .NET SDK is required. Logs go to stderr. The password is never read or logged.
+set -euo pipefail
+
+VERSION="${KASHFLOW_MCP_VERSION:-1.0.0}"
+REPO="${KASHFLOW_MCP_REPO:-logicethos/KashflowConnector}"
+
+log() { printf '%s\n' "$*" >&2; }
+die() { log "kashflow-mcp: $*"; exit 1; }
+
+if [ -n "${KASHFLOW_MCP_BIN:-}" ]; then
+  [ -f "$KASHFLOW_MCP_BIN" ] || die "KASHFLOW_MCP_BIN does not exist: $KASHFLOW_MCP_BIN"
+  [ -x "$KASHFLOW_MCP_BIN" ] || chmod +x "$KASHFLOW_MCP_BIN" || die "could not make KASHFLOW_MCP_BIN executable"
+  exec "$KASHFLOW_MCP_BIN" "$@"
+fi
+
+detect_rid() {
+  if [ -n "${KASHFLOW_MCP_RID:-}" ]; then
+    printf '%s\n' "$KASHFLOW_MCP_RID"
+    return
+  fi
+  local os arch plat cpu
+  os=$(uname -s)
+  arch=$(uname -m)
+  case "$os" in
+    Linux) plat=linux ;;
+    Darwin) plat=osx ;;
+    MINGW*|MSYS*|CYGWIN*) plat=win ;;
+    *) die "unsupported operating system: $os" ;;
+  esac
+  case "$arch" in
+    x86_64|amd64|AMD64) cpu=x64 ;;
+    aarch64|arm64|ARM64) cpu=arm64 ;;
+    *) die "unsupported architecture: $arch" ;;
+  esac
+  printf '%s\n' "${plat}-${cpu}"
+}
+
+rid=$(detect_rid)
+case "$rid" in
+  win-*) bin_name="KashflowMCP.exe" ;;
+  *) bin_name="KashflowMCP" ;;
+esac
+
+if [ -n "${KASHFLOW_MCP_CACHE:-}" ]; then
+  cache_root="$KASHFLOW_MCP_CACHE"
+elif [ -n "${XDG_CACHE_HOME:-}" ]; then
+  cache_root="${XDG_CACHE_HOME}/kashflow-mcp"
+elif [ -n "${HOME:-}" ]; then
+  cache_root="${HOME}/.cache/kashflow-mcp"
+else
+  die "HOME is not set. Set KASHFLOW_MCP_CACHE to a writable directory."
+fi
+
+base="${KASHFLOW_MCP_RELEASE_BASE:-https://github.com/${REPO}/releases/download/v${VERSION}}"
+base="${base%/}"
+dest="${cache_root}/${VERSION}/${rid}"
+lockdir="${cache_root}/.lock"
+
+download() {
+  local url=$1 out=$2
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 3 --retry-delay 1 -o "$out" "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$out" "$url"
+  else
+    return 1
+  fi
+}
+
+hash_file() {
+  local file=$1
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print tolower($1)}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print tolower($1)}'
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$file"
+  else
+    die "need sha256sum, shasum, or python3 to verify the release checksum"
+  fi
+}
+
+extract_zip() {
+  local zip=$1 into=$2
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$zip" "$into" <<'PY'
+import sys, zipfile
+from pathlib import Path
+zip_path, dest = sys.argv[1], Path(sys.argv[2]).resolve()
+dest.mkdir(parents=True, exist_ok=True)
+with zipfile.ZipFile(zip_path) as archive:
+    for info in archive.infolist():
+        name = info.filename.replace("\\", "/")
+        if name.startswith("/") or ".." in name.split("/"):
+            raise SystemExit(f"refusing to extract {info.filename}")
+        target = (dest / name).resolve()
+        if target != dest and not str(target).startswith(str(dest) + "/"):
+            raise SystemExit(f"refusing to extract {info.filename}")
+        if info.is_dir() or name.endswith("/"):
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with archive.open(info) as src, open(target, "wb") as out:
+            out.write(src.read())
+PY
+    return
+  fi
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$zip" -d "$into"
+    return
+  fi
+  die "need python3 or unzip to extract the release archive"
+}
+
+mkdir -p "$cache_root"
+waited=0
+while ! mkdir "$lockdir" 2>/dev/null; do
+  waited=$((waited + 1))
+  if [ "$waited" -gt 150 ]; then
+    die "timed out waiting for another download to finish"
+  fi
+  sleep 0.2
+done
+release_lock() { rmdir "$lockdir" 2>/dev/null || true; }
+trap release_lock EXIT
+
+stamp=""
+if [ -f "$dest/.sha256" ]; then
+  stamp=$(tr '[:upper:]' '[:lower:]' < "$dest/.sha256" | tr -d '[:space:]')
+fi
+
+sums=$(mktemp)
+expected=""
+if download "$base/SHA256SUMS" "$sums"; then
+  expected=$(awk -v name="KashflowMCP-${rid}.zip" '$NF == name { print tolower($1); exit }' "$sums" || true)
+else
+  log "kashflow-mcp: could not download $base/SHA256SUMS"
+fi
+rm -f "$sums"
+
+launch() {
+  local bin=$1
+  shift
+  [ -x "$bin" ] || chmod +x "$bin" || die "could not make $bin executable"
+  release_lock
+  trap - EXIT
+  exec "$bin" "$@"
+}
+
+if [ -n "$expected" ] && [ -f "$dest/$bin_name" ] && [ "$stamp" = "$expected" ]; then
+  launch "$dest/$bin_name" "$@"
+fi
+
+if [ -z "$expected" ] && [ -f "$dest/$bin_name" ] && [ -n "$stamp" ]; then
+  log "kashflow-mcp: checksum server unavailable; using cached ${rid} binary"
+  launch "$dest/$bin_name" "$@"
+fi
+
+if [ -z "$expected" ]; then
+  die "no checksum for KashflowMCP-${rid}.zip in the v${VERSION} release. Publish that GitHub release (scripts/publish.sh) before installing the plugin."
+fi
+
+tmpdir=$(mktemp -d)
+zip_path="$tmpdir/KashflowMCP-${rid}.zip"
+download "$base/KashflowMCP-${rid}.zip" "$zip_path" \
+  || die "could not download $base/KashflowMCP-${rid}.zip. Create the v${VERSION} GitHub release first."
+
+actual=$(hash_file "$zip_path")
+if [ "$actual" != "$expected" ]; then
+  die "checksum mismatch for KashflowMCP-${rid}.zip (expected $expected, got $actual)"
+fi
+
+extract_dir="$tmpdir/extract"
+mkdir -p "$extract_dir"
+extract_zip "$zip_path" "$extract_dir"
+
+found=""
+while IFS= read -r line; do
+  found=$line
+  break
+done <<EOF
+$(find "$extract_dir" -type f -name "$bin_name")
+EOF
+[ -n "$found" ] || die "archive KashflowMCP-${rid}.zip did not contain $bin_name"
+case "$found" in
+  "$extract_dir"/*) ;;
+  *) die "refusing to run a binary outside the extract directory" ;;
+esac
+
+rm -rf "$dest"
+mkdir -p "$dest"
+cp -a "$(dirname "$found")/." "$dest/"
+printf '%s\n' "$expected" > "$dest/.sha256"
+chmod +x "$dest/$bin_name"
+rm -rf "$tmpdir"
+
+log "kashflow-mcp: installed ${rid} v${VERSION}"
+launch "$dest/$bin_name" "$@"

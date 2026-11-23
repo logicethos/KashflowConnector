@@ -1,0 +1,54 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Build
+        run: dotnet build KashflowConnector.slnx -c Release
+      - name: Test
+        run: dotnet test KashflowConnector.slnx -c Release --no-build
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Check the tag matches the plugin version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(python3 -c "import json; print(json.load(open('.cursor-plugin/plugin.json'))['version'])")
+          test "$tag" = "$manifest"
+          grep -q "<Version>${tag}</Version>" src/KashflowMCP/KashflowMCP.csproj
+          grep -q "<Version>${tag}</Version>" src/KashflowDLL/KashflowDLL.csproj
+          grep -q "KASHFLOW_MCP_VERSION:-${tag}" scripts/kashflow-mcp
+          grep -q "'${tag}'" scripts/kashflow-mcp.ps1
+      - name: Publish self-contained binaries
+        run: ./scripts/publish.sh
+      - name: Attach release archives
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/release/*.zip
+            artifacts/release/SHA256SUMS
