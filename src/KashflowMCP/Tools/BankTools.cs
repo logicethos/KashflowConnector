@@ -1,0 +1,34 @@
+using System.ComponentModel;
+using KashFlow;
+using ModelContextProtocol.Server;
+
+namespace KashflowMCP.Tools;
+
+[McpServerToolType]
+public sealed class BankTools(KashFlowClient client)
+{
+    [McpServerTool(Name = "get_bank_accounts"), Description("List bank accounts.")]
+    public async Task<string> GetBankAccounts(CancellationToken cancellationToken)
+        => JsonResults.Serialize(await client.GetBankAccountsAsync(cancellationToken));
+
+    [McpServerTool(Name = "get_bank_overview"), Description("Get bank overview balances.")]
+    public async Task<string> GetBankOverview(CancellationToken cancellationToken)
+        => JsonResults.Serialize(await client.GetBankOverviewAsync(cancellationToken));
+
+    [McpServerTool(Name = "get_bank_balance"), Description("Get balance for a bank account on a date.")]
+    public async Task<string> GetBankBalance(
+        [Description("Bank account ID")] int accountId,
+        [Description("Balance date")] DateTime balanceDate,
+        CancellationToken cancellationToken)
+        => JsonResults.Serialize(new { balance = await client.GetBankBalanceAsync(accountId, balanceDate, cancellationToken) });
+
+    [McpServerTool(Name = "get_bank_transactions"), Description("List bank transactions for an account.")]
+    public async Task<string> GetBankTransactions(
+        [Description("Bank account ID")] int accountId,
+        CancellationToken cancellationToken)
+        => JsonResults.Serialize(await client.GetBankTransactionsAsync(accountId, cancellationToken));
+
+    [McpServerTool(Name = "get_bank_tx_types"), Description("List bank transaction types.")]
+    public async Task<string> GetBankTxTypes(CancellationToken cancellationToken)
+        => JsonResults.Serialize(await client.GetBankTxTypesAsync(cancellationToken));
+}

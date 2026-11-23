@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/KashflowDLL/KashflowDLL.csproj" />
+    <Project Path="src/KashflowMCP/KashflowMCP.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KashflowDLL.Tests/KashflowDLL.Tests.csproj" />
+  </Folder>
+</Solution>
