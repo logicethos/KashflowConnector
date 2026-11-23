@@ -1,21 +1,11 @@
-// Cursor mcp.json (stdio) example — point "command" at a published self-contained binary:
+// Marketplace install runs scripts/kashflow-mcp (see mcp.json). That launcher downloads
+// the self-contained binary; this process does not require the .NET SDK.
 //
-// {
-//   "mcpServers": {
-//     "kashflow": {
-//       "command": "/path/to/artifacts/publish/linux-x64/KashflowMCP",
-//       "env": {
-//         "KashFlow__UserName": "your-soap-api-username",
-//         "KashFlow__Password": "your-soap-api-password",
-//         "KashFlow__ReadOnly": "true"
-//       }
-//     }
-//   }
-// }
-//
-// SOAP UserName/Password are required (not the REST memorable word). ReadOnly defaults to true.
+// Credentials are optional at startup so hosts can call tools/list before setup.
+// KashFlow__UserName and KashFlow__Password are the SOAP API username and password,
+// not the REST memorable word. KashFlow__ReadOnly defaults to true.
+// The password is never logged.
 
-using KashFlow;
 using KashflowMCP;
 using KashflowMCP.Tools;
 using Microsoft.Extensions.Configuration;
@@ -27,46 +17,15 @@ var builder = Host.CreateApplicationBuilder(args);
 
 builder.Logging.AddConsole(options =>
 {
-    // stdout is reserved for MCP JSON-RPC
+    // stdout is reserved for MCP JSON-RPC.
     options.LogToStandardErrorThreshold = LogLevel.Trace;
 });
 
 builder.Configuration.AddEnvironmentVariables();
 
-var kashFlowSection = builder.Configuration.GetSection("KashFlow");
-var userName = kashFlowSection["UserName"];
-var password = kashFlowSection["Password"];
-var readOnly = kashFlowSection.GetValue("ReadOnly", defaultValue: true);
-var timeoutSeconds = kashFlowSection.GetValue("TimeoutSeconds", defaultValue: 100);
-var endpointText = kashFlowSection["Endpoint"];
-
-if (string.IsNullOrWhiteSpace(userName) || string.IsNullOrWhiteSpace(password))
-{
-    Console.Error.WriteLine(
-        "KashflowMCP requires KashFlow__UserName and KashFlow__Password (SOAP API credentials). " +
-        "Optional: KashFlow__ReadOnly (default true).");
-    return 1;
-}
-
-var clientOptions = new KashFlowClientOptions(userName, password)
-{
-    ReadOnly = readOnly,
-    Timeout = TimeSpan.FromSeconds(timeoutSeconds > 0 ? timeoutSeconds : 100),
-};
-
-if (!string.IsNullOrWhiteSpace(endpointText) && Uri.TryCreate(endpointText, UriKind.Absolute, out var endpointUri))
-{
-    clientOptions = new KashFlowClientOptions(userName, password)
-    {
-        ReadOnly = readOnly,
-        Timeout = TimeSpan.FromSeconds(timeoutSeconds > 0 ? timeoutSeconds : 100),
-        Endpoint = endpointUri,
-    };
-}
-
-builder.Services.AddSingleton(clientOptions);
-builder.Services.AddSingleton(_ => new KashFlowClient(clientOptions));
-builder.Services.AddSingleton(new McpRuntimeOptions(readOnly));
+var session = KashFlowSession.FromConfiguration(builder.Configuration);
+builder.Services.AddSingleton(session);
+builder.Services.AddSingleton(new McpRuntimeOptions(session.ReadOnly));
 
 var mcp = builder.Services
     .AddMcpServer(o =>
@@ -85,11 +44,11 @@ var mcp = builder.Services
     .WithTools<JournalTools>()
     .WithTools<BankTools>();
 
-if (!readOnly)
+if (!session.ReadOnly)
     mcp.WithTools<WriteTools>();
 
-Console.Error.WriteLine($"KashflowMCP starting (ReadOnly={readOnly}). Password is never logged.");
+Console.Error.WriteLine(
+    $"KashflowMCP starting (ReadOnly={session.ReadOnly}, credentialsConfigured={session.CredentialsConfigured}). Password is never logged.");
 
 await builder.Build().RunAsync();
 return 0;
-

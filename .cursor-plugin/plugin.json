@@ -1,0 +1,35 @@
+{
+  "name": "kashflow",
+  "version": "1.0.0",
+  "description": "Read and optionally write IRIS KashFlow accounting data (customers, suppliers, invoices, receipts, journals, nominals, and bank) through the SOAP API.",
+  "author": {
+    "name": "Logic Ethos Ltd"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/logicethos/KashflowConnector",
+  "repository": "https://github.com/logicethos/KashflowConnector",
+  "keywords": ["kashflow", "accounting", "invoices", "bookkeeping", "mcp"],
+  "logo": "assets/logo.svg",
+  "variables": {
+    "type": "object",
+    "properties": {
+      "KASHFLOW_USERNAME": {
+        "type": "string",
+        "title": "KashFlow SOAP API username",
+        "description": "SOAP API UserName from the KashFlow account. This is not the REST memorable word."
+      },
+      "KASHFLOW_PASSWORD": {
+        "type": "string",
+        "title": "KashFlow SOAP API password",
+        "description": "SOAP API Password. Stored as a secret by Cursor and never logged by the server. This is not the REST memorable word."
+      },
+      "KASHFLOW_READ_ONLY": {
+        "type": "boolean",
+        "title": "Read only",
+        "description": "When true, only read tools are registered and write SOAP calls are blocked. Set false to enable insert_customer, insert_supplier, insert_invoice, insert_receipt2, and insert_journal.",
+        "default": true
+      }
+    },
+    "required": ["KASHFLOW_USERNAME", "KASHFLOW_PASSWORD"]
+  }
+}
