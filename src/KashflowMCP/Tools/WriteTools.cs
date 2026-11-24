@@ -67,4 +67,44 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
         var id = await session.Client.InsertJournalAsync(mapped, cancellationToken);
         return JsonResults.Serialize(new { journalId = id });
     }
+
+    [McpServerTool(Name = "insert_receipt_payment"), Description("Record a payment against a purchase receipt (SOAP InsertReceiptPayment). Requires KashFlow__ReadOnly=false. Check get_receipt_payments first so the receipt is not paid twice. payInvoice is the receipt number. payAccount is the bank account id from get_bank_accounts (accountId). If you know the nominal code instead (accountCode, for example 1206 Starling or 1209 Revolut), pass bankAccountCode and it is resolved to accountId. payMethod is the methodId from get_receipt_payment_methods. When both an id and a name or code are passed, the id is used.")]
+    public async Task<string> InsertReceiptPayment(
+        [Description("Purchase receipt number. Stored as Payment.PayInvoice.")] int receiptNumber,
+        [Description("Date the receipt was paid (ISO-8601). Stored as Payment.PayDate.")] DateTime paymentDate,
+        [Description("Amount paid, greater than 0, in the receipt currency. Stored as Payment.PayAmount.")] decimal amount,
+        [Description("Payment method id from get_receipt_payment_methods (methodId). Stored as Payment.PayMethod. Optional when paymentMethodName is set.")] int? paymentMethodId = null,
+        [Description("Payment method name from get_receipt_payment_methods (methodName), matched ignoring case. Used only when paymentMethodId is omitted.")] string? paymentMethodName = null,
+        [Description("Bank account id from get_bank_accounts (accountId). Stored as Payment.PayAccount. Optional when bankAccountCode is set. When both are set, this id is used.")] int? bankAccountId = null,
+        [Description("Bank account nominal code from get_bank_accounts (accountCode), for example 1206. Resolved to accountId. Used only when bankAccountId is omitted.")] int? bankAccountCode = null,
+        [Description("Optional note stored as Payment.PayNote.")] string? note = null,
+        CancellationToken cancellationToken = default)
+    {
+        ToolGuard.EnsureWritable(runtime);
+
+        var methodId = paymentMethodId is int givenMethod && givenMethod > 0
+            ? givenMethod
+            : ReceiptPaymentMapper.ResolvePaymentMethodId(
+                paymentMethodId,
+                paymentMethodName,
+                await session.Client.GetRecPayMethodsAsync(cancellationToken));
+
+        var accountId = bankAccountId is int givenAccount && givenAccount > 0
+            ? givenAccount
+            : ReceiptPaymentMapper.ResolveBankAccountId(
+                bankAccountId,
+                bankAccountCode,
+                await session.Client.GetBankAccountsAsync(cancellationToken));
+
+        var payment = ReceiptPaymentMapper.Create(receiptNumber, paymentDate, amount, methodId, accountId, note);
+        var id = await session.Client.InsertReceiptPaymentAsync(payment, cancellationToken);
+        return JsonResults.Serialize(new
+        {
+            receiptPaymentId = id,
+            receiptNumber,
+            amount,
+            payAccount = accountId,
+            payMethod = methodId,
+        });
+    }
 }

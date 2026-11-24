@@ -30,4 +30,14 @@ public sealed class PaymentTools(KashFlowSession session)
         [Description("Customer ID")] int customerId,
         CancellationToken cancellationToken)
         => JsonResults.Serialize(await session.Client.GetCustomerAdvancePaymentsAsync(customerId, cancellationToken));
+
+    [McpServerTool(Name = "get_receipt_payments"), Description("List payments already recorded against a purchase receipt (SOAP GetReceiptPayment). Call this before insert_receipt_payment so the same receipt is not paid twice. payInvoice is the receipt number. payAccount is the bank account id (not the nominal code). payMethod is the payment method id. payId is the payment's own id.")]
+    public async Task<string> GetReceiptPayments(
+        [Description("Purchase receipt number")] int receiptNumber,
+        CancellationToken cancellationToken)
+        => JsonResults.Serialize(await session.Client.GetReceiptPaymentAsync(receiptNumber, cancellationToken));
+
+    [McpServerTool(Name = "get_receipt_payment_methods"), Description("List payment methods for purchase-receipt payments (SOAP GetRecPayMethods). methodId is the value to pass as paymentMethodId to insert_receipt_payment. methodName is the label, for example Bank Transfer.")]
+    public async Task<string> GetReceiptPaymentMethods(CancellationToken cancellationToken)
+        => JsonResults.Serialize(await session.Client.GetRecPayMethodsAsync(cancellationToken));
 }

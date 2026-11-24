@@ -7,7 +7,7 @@ namespace KashflowMCP.Tools;
 [McpServerToolType]
 public sealed class BankTools(KashFlowSession session)
 {
-    [McpServerTool(Name = "get_bank_accounts"), Description("List bank accounts.")]
+    [McpServerTool(Name = "get_bank_accounts"), Description("List bank accounts. accountId is the internal id (SOAP BankAccount.AccountID) and is what payments store in payAccount. accountCode is the nominal code, for example 1206 for a Starling account or 1209 for Revolut. accountName is the display name. insert_receipt_payment accepts either accountId or accountCode.")]
     public async Task<string> GetBankAccounts(CancellationToken cancellationToken)
         => JsonResults.Serialize(await session.Client.GetBankAccountsAsync(cancellationToken));
 
