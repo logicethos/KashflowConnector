@@ -87,4 +87,15 @@ public class ReceiptPaymentMapperTests
 
         Assert.Contains("ReadOnly", error.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task Generated_delete_receipt_payment_is_blocked_while_read_only()
+    {
+        using var session = KashFlowSession.FromConfiguration(new ConfigurationBuilder().Build());
+        var tools = new AdditionalWriteTools(session, new McpRuntimeOptions(true));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => tools.DeleteReceiptPayment(9));
+
+        Assert.Contains("ReadOnly", error.Message, StringComparison.Ordinal);
+    }
 }
