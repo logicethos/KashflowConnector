@@ -65,11 +65,15 @@ Not exposed, because they are not accounting-record operations or they duplicate
 - `SageFile`, `SageFileImport`, `GetDigitaCSVFile`, and `VCFToCustomerObjects` are file or binary payloads.
 - `*TypeDefined` operations are the legacy duplicate of the operation without that suffix (`GetInvoice` rather than `GetInvoice_TypeDefined`, and the same for invoices, receipts, and account defaults).
 
-Sales invoice payments are `insert_invoice_payment` (`Payment`: `payInvoice` is the invoice number, `payMethod` the method id, `payAccount` the bank account id, `payAmount` the amount), `get_invoice_payments`, and `delete_invoice_payment` (`invoiceNumber`, `invoicePaymentNumber`). Purchase payment removal is `delete_receipt_payment` (`receiptPaymentNumber`). A single bank transaction is `insert_bank_transaction` (plus `update_bank_transaction` and `delete_bank_transaction`). That generated tool is the only single-sided insert.
+Sales invoice payments are `insert_invoice_payment` (`Payment`: `payInvoice` is the invoice number, `payMethod` the method id, `payAccount` the bank account id, `payAmount` the amount), `get_invoice_payments`, and `delete_invoice_payment` (`invoiceNumber`, `invoicePaymentNumber`). Purchase payment removal is `delete_receipt_payment` (`receiptPaymentNumber`). A single bank transaction is `insert_bank_transaction` (plus `update_bank_transaction` and `delete_bank_transaction`). That generated tool is the only single-sided insert. Moving money between two bank accounts is the custom function `transfer_between_bank_accounts`.
 
-## Bank transfers
+## Custom functions
 
-KashFlow's SOAP API has no transfer operation. `transfer_between_bank_accounts` is this server's own write. It is available only when `KashFlow__ReadOnly` is false. It does not replace `insert_bank_transaction`. It calls that same SOAP operation twice:
+Tools in this section are composed by this server. They are not one-to-one SOAP operations. Generated single-sided tools such as `insert_bank_transaction` stay under [Other SOAP operations](#other-soap-operations).
+
+### `transfer_between_bank_accounts`
+
+KashFlow's SOAP API has no transfer operation. This write is available only when `KashFlow__ReadOnly` is false. It does not replace `insert_bank_transaction`. It calls that same SOAP operation twice:
 
 - source account: `moneyout` = amount
 - destination account: `moneyin` = amount
