@@ -274,7 +274,7 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
         });
     }
 
-    [McpServerTool(Name = "insert_fx_receipt_payment"), Description("Pay a foreign-currency purchase receipt from a GBP bank account. Add-only. Outstanding is the GBP book value ((net+VAT)/ExchangeRate) minus GBP AmountPaid. (1) InsertReceiptPayment for bankAmountGbp from the bank account. (2) An Other payment on the same receipt labelled Currency Fluctuation for outstanding - bankAmountGbp (may be negative). (3) A companion GBP purchase receipt for the same supplier on nominal 956 (Forex Gain/Loss), description Loss/Gain on KF##### due to exchange rate fluctuations, paid in full as Other with the opposite sign to (2). Requires KashFlow__ReadOnly=false unless dryRun=true. If a later step fails, earlier rows created by this call are deleted when possible.")]
+    [McpServerTool(Name = "insert_fx_receipt_payment"), Description("Pay a foreign-currency purchase receipt from a GBP bank account. Add-only. Outstanding is the GBP book value ((net+VAT)/ExchangeRate) minus GBP AmountPaid. (1) InsertReceiptPayment for bankAmountGbp from the bank account. (2) An Other payment on the same receipt labelled Currency Fluctuation with PayAccount=0 (non-bank) for outstanding - bankAmountGbp (may be negative). (3) A companion GBP purchase receipt for the same supplier on nominal 956 (Forex Gain/Loss), description Loss on KF##### or Gain on KF##### due to exchange rate fluctuations, paid in full as Other with PayAccount=0. (4) UpdateReceipt2 Paid=1 on the source (and companion). If Other lines still create bank-feed rows, deletes only safe single-sided Currency Fluctuation matches. Requires KashFlow__ReadOnly=false unless dryRun=true. If a later step fails, earlier rows created by this call are deleted when possible.")]
     public async Task<string> InsertFxReceiptPayment(
         [Description("Purchase receipt number.")] int receiptNumber,
         [Description("Payment and companion receipt date (ISO-8601).")] DateTime paymentDate,
@@ -316,6 +316,7 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
             object? companionReceipt = null;
             object? companionPayment = null;
             object? fluctuationPayment = null;
+            object? bankFeedCleanup = null;
             if (plan.FluctuationAmount != 0)
             {
                 fluctuationPayment = new
@@ -323,8 +324,9 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
                     receiptNumber,
                     amount = plan.FluctuationAmount,
                     payMethod = otherMethodId,
-                    payAccount = accountId,
+                    payAccount = FxReceiptPayment.NonBankPayAccount,
                     note = FxReceiptPayment.FluctuationNote,
+                    bankFeed = "PayAccount=0 so this Other line should not appear on GetBankTransactions (unlike SOAP with a real bank PayAccount).",
                 };
                 companionReceipt = new
                 {
@@ -337,13 +339,23 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
                     nominalCode = FxReceiptPayment.ForexNominalCode,
                     forexNominalId,
                     description = plan.CompanionDescription,
+                    paid = 1,
                 };
                 companionPayment = new
                 {
                     amount = plan.CompanionPaymentAmount,
                     payMethod = otherMethodId,
-                    payAccount = accountId,
+                    payAccount = FxReceiptPayment.NonBankPayAccount,
                     note = FxReceiptPayment.FluctuationNote,
+                    bankFeed = "PayAccount=0 (non-bank).",
+                };
+                bankFeedCleanup = new
+                {
+                    approach = "After Other inserts, scan the bank account for Currency Fluctuation rows matching payment date and absolute fluctuation amount. Delete only new single-sided rows. Never delete a row that has both moneyIn and moneyOut (shared id with the bank payment).",
+                    bankAccountId = accountId,
+                    comment = FxReceiptPayment.FluctuationNote,
+                    absoluteAmount = Math.Abs(plan.FluctuationAmount),
+                    paymentDate = paymentDate.Date,
                 };
             }
 
@@ -362,10 +374,19 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
                     payMethod = bankMethodId,
                     payAccount = accountId,
                     note,
+                    bankFeed = "Creates the real bank-feed money-out line.",
                 },
                 fluctuationPayment,
                 companionReceipt,
                 companionPayment,
+                bankFeedCleanup,
+                markPaid = new
+                {
+                    sourceReceipt = new { receiptNumber, paid = 1, via = "UpdateReceipt2" },
+                    companionReceipt = plan.FluctuationAmount != 0
+                        ? new { paid = 1, via = "UpdateReceipt2", description = plan.CompanionDescription }
+                        : null,
+                },
             });
         }
 
@@ -381,6 +402,9 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
             (payment, token) => session.Client.InsertReceiptPaymentAsync(payment, token),
             (companion, token) => session.Client.InsertReceipt2Async(companion, token),
             async (number, token) => await session.Client.GetReceipt2Async(number, token),
+            async (updated, token) => { await session.Client.UpdateReceipt2Async(updated, token); },
+            async (account, token) => await session.Client.GetBankTransactionsAsync(account, token),
+            async (txId, token) => { await session.Client.DeleteBankTransactionAsync(txId, token); },
             async (paymentId, token) => { await session.Client.DeleteReceiptPaymentAsync(paymentId, token); },
             async (number, token) => { await session.Client.DeleteReceiptAsync(number, token); },
             cancellationToken);
@@ -393,11 +417,94 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
             companionReceiptNumber = result.CompanionReceiptNumber,
             companionReceiptId = result.CompanionReceiptId,
             companionPaymentId = result.CompanionPaymentId,
+            deletedBankTransactionIds = result.DeletedBankTransactionIds,
+            bankCleanupSkipped = result.BankCleanupSkipped,
+            sourceReceiptMarkedPaid = result.SourceReceiptMarkedPaid,
+            companionReceiptMarkedPaid = result.CompanionReceiptMarkedPaid,
             bookValueGbp = result.Plan.BookValueGbp,
             outstandingBefore = result.Plan.OutstandingBefore,
             bankAmountGbp = result.Plan.BankAmountGbp,
             fluctuationAmount = result.Plan.FluctuationAmount,
             companionNetAmount = result.Plan.CompanionNetAmount,
+            companionDescription = result.Plan.CompanionDescription,
+        });
+    }
+
+    [McpServerTool(Name = "cleanup_fx_receipt_bank_lines"), Description("Carefully remove stray Currency Fluctuation bank-feed lines left by an already-posted SOAP FX receipt payment. Matches GetBankTransactions rows by bank account, payment date, absolute fluctuation amount, and comment 'Currency Fluctuation'. Never deletes a row that has both moneyIn and moneyOut (that shared id would remove the real bank payment). Requires KashFlow__ReadOnly=false unless dryRun=true. Prefer dryRun first.")]
+    public async Task<string> CleanupFxReceiptBankLines(
+        [Description("Bank account id from get_bank_accounts. Optional when bankAccountCode is set.")] int? bankAccountId = null,
+        [Description("Bank account nominal code from get_bank_accounts. Used only when bankAccountId is omitted.")] int? bankAccountCode = null,
+        [Description("Payment date of the FX booking (ISO-8601).")] DateTime paymentDate = default,
+        [Description("Fluctuation amount as posted (may be negative). Absolute value is matched against moneyIn or moneyOut.")] decimal fluctuationAmount = 0,
+        [Description("When true, list matching candidates without deleting. Default true for safety.")] bool dryRun = true,
+        CancellationToken cancellationToken = default)
+    {
+        if (paymentDate == default)
+            throw new ArgumentException("paymentDate is required.");
+        if (fluctuationAmount == 0)
+            throw new ArgumentException("fluctuationAmount must be non-zero.");
+
+        if (!dryRun)
+            ToolGuard.EnsureWritable(runtime);
+
+        var accountId = bankAccountId is int givenAccount && givenAccount > 0
+            ? givenAccount
+            : ReceiptPaymentMapper.ResolveBankAccountId(
+                bankAccountId,
+                bankAccountCode,
+                await session.Client.GetBankAccountsAsync(cancellationToken));
+
+        var transactions = await session.Client.GetBankTransactionsAsync(accountId, cancellationToken);
+        var candidates = FxBankFeedCleanup.FindCandidates(
+            transactions,
+            paymentDate,
+            fluctuationAmount,
+            FxReceiptPayment.FluctuationNote);
+
+        if (dryRun)
+        {
+            return JsonResults.Serialize(new
+            {
+                dryRun = true,
+                bankAccountId = accountId,
+                paymentDate = paymentDate.Date,
+                fluctuationAmount,
+                absoluteAmount = Math.Abs(fluctuationAmount),
+                comment = FxReceiptPayment.FluctuationNote,
+                candidates = candidates.Select(c => new
+                {
+                    c.TransactionId,
+                    c.TransactionDate,
+                    c.MoneyIn,
+                    c.MoneyOut,
+                    c.Comment,
+                    c.SafeToDelete,
+                    c.Reason,
+                }),
+            });
+        }
+
+        var result = await FxBankFeedCleanup.DeleteSafeCandidatesAsync(
+            candidates,
+            async (txId, token) => { await session.Client.DeleteBankTransactionAsync(txId, token); },
+            cancellationToken);
+
+        return JsonResults.Serialize(new
+        {
+            dryRun = false,
+            bankAccountId = accountId,
+            deletedTransactionIds = result.DeletedTransactionIds,
+            skipped = result.Skipped,
+            candidates = result.Candidates.Select(c => new
+            {
+                c.TransactionId,
+                c.TransactionDate,
+                c.MoneyIn,
+                c.MoneyOut,
+                c.Comment,
+                c.SafeToDelete,
+                c.Reason,
+            }),
         });
     }
 

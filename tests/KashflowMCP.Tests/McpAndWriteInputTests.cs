@@ -303,6 +303,7 @@ public class McpToolsListTests
         Assert.DoesNotContain("allocate_bank_payment_to_receipts", names);
         Assert.DoesNotContain("insert_fx_receipt_payment", names);
         Assert.DoesNotContain("write_off_receipt_rounding", names);
+        Assert.DoesNotContain("cleanup_fx_receipt_bank_lines", names);
         Assert.DoesNotContain("insert_invoice_payment", names);
         Assert.DoesNotContain("delete_receipt_payment", names);
         Assert.DoesNotContain("insert_bank_transaction", names);
@@ -370,7 +371,7 @@ public class McpToolsListTests
                      "insert_invoice_payment", "delete_invoice_payment", "delete_receipt_payment", "insert_bank_transaction",
                      "update_customer", "delete_customer", "update_invoice", "delete_invoice", "update_receipt2", "insert_quote",
                      "transfer_between_bank_accounts", "allocate_bank_payment_to_receipts", "insert_fx_receipt_payment",
-                     "write_off_receipt_rounding",
+                     "write_off_receipt_rounding", "cleanup_fx_receipt_bank_lines",
                  })
             Assert.Contains(writeName, tools.Keys);
         Assert.Equal(1, tools.Keys.Count(name => name == "insert_bank_transaction"));
@@ -408,6 +409,13 @@ public class McpToolsListTests
         var writeOff = tools["write_off_receipt_rounding"].JsonSchema.GetProperty("properties");
         foreach (var field in new[] { "receiptNumber", "paymentDate", "nominal", "maxAmount", "note", "dryRun" })
             Assert.True(writeOff.TryGetProperty(field, out _), field);
+
+        var cleanup = tools["cleanup_fx_receipt_bank_lines"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[]
+                 {
+                     "bankAccountId", "bankAccountCode", "paymentDate", "fluctuationAmount", "dryRun",
+                 })
+            Assert.True(cleanup.TryGetProperty(field, out _), field);
 
         Assert.Contains("search_bank_transactions", tools.Keys);
         var search = tools["search_bank_transactions"].JsonSchema.GetProperty("properties");

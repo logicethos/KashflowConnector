@@ -49,8 +49,9 @@ public static class ReceiptOutstanding
             throw new ArgumentException("amount must be non-zero.");
         if (paymentMethodId <= 0)
             throw new ArgumentException("paymentMethodId must be a methodId from get_receipt_payment_methods.");
-        if (bankAccountId <= 0)
-            throw new ArgumentException("bankAccountId must be an accountId from get_bank_accounts.");
+        // bankAccountId 0 = NonBankPayAccount (Other / Currency Fluctuation; no bank feed).
+        if (bankAccountId < 0)
+            throw new ArgumentException("bankAccountId must be an accountId from get_bank_accounts, or 0 for non-bank Other payments.");
 
         return new Payment
         {

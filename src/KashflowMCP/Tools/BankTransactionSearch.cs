@@ -23,7 +23,8 @@ public static class BankTransactionSearch
         decimal MoneyIn,
         decimal MoneyOut,
         string? Comment,
-        int TransactionType);
+        int TransactionType,
+        bool HasBothMoneyInAndOut);
 
     public static Direction ParseDirection(string? direction)
     {
@@ -75,7 +76,11 @@ public static class BankTransactionSearch
         if (tolerance < 0)
             throw new ArgumentException("tolerance must be 0 or greater.");
 
-        bool Close(decimal value) => Math.Abs(value - amount) <= tolerance;
+        // Compare against the signed value and its absolute value so a search for 1.80 also
+        // finds moneyout=-1.80 (or moneyin=-1.80) if KashFlow ever returns a signed side.
+        bool Close(decimal value)
+            => Math.Abs(value - amount) <= tolerance
+               || Math.Abs(Math.Abs(value) - Math.Abs(amount)) <= tolerance;
 
         return direction switch
         {
@@ -83,6 +88,27 @@ public static class BankTransactionSearch
             Direction.Out => Close(transaction.Moneyout),
             _ => Close(transaction.Moneyin) || Close(transaction.Moneyout),
         };
+    }
+
+    /// <summary>
+    /// True when one BankTransaction row carries both money-in and money-out. Such a row can match
+    /// two different amount searches under the same <see cref="BankTransaction.ID"/> (observed on
+    /// KF04195: 148.11 and 1.80 sharing id 154508988). That is API payload shape, not Match inventing ids.
+    /// </summary>
+    public static bool HasBothMoneySides(BankTransaction transaction)
+    {
+        ArgumentNullException.ThrowIfNull(transaction);
+        return transaction.Moneyin != 0 && transaction.Moneyout != 0;
+    }
+
+    public static IReadOnlyList<int> DuplicateTransactionIds(IEnumerable<Match> matches)
+    {
+        ArgumentNullException.ThrowIfNull(matches);
+        return matches
+            .GroupBy(match => match.TransactionId)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToList();
     }
 
     public static bool MatchesDate(BankTransaction transaction, DateTime dateFrom, DateTime dateTo)
@@ -131,7 +157,8 @@ public static class BankTransactionSearch
                 transaction.Moneyin,
                 transaction.Moneyout,
                 transaction.Comment,
-                transaction.TransactionType));
+                transaction.TransactionType,
+                HasBothMoneySides(transaction)));
             remaining--;
         }
 

@@ -11,6 +11,14 @@ public static class FxReceiptPayment
     public const int ForexNominalCode = 956;
     public const string FluctuationNote = "Currency Fluctuation";
 
+    /// <summary>
+    /// PayAccount for Other / Currency Fluctuation lines. Official Payment docs only describe a bank
+    /// account from GetBankAccounts; SOAP InsertReceiptPayment with a real PayAccount creates bank-feed
+    /// rows that UI-booked Other lines do not. PayAccount=0 is the non-bank convention used here so
+    /// fluctuation and companion lines do not hit the bank feed.
+    /// </summary>
+    public const int NonBankPayAccount = 0;
+
     public sealed record Plan(
         decimal BookValueGbp,
         decimal OutstandingBefore,
@@ -27,6 +35,10 @@ public static class FxReceiptPayment
         int? CompanionReceiptNumber,
         int? CompanionReceiptId,
         int? CompanionPaymentId,
+        IReadOnlyList<int> DeletedBankTransactionIds,
+        IReadOnlyList<string> BankCleanupSkipped,
+        bool SourceReceiptMarkedPaid,
+        bool? CompanionReceiptMarkedPaid,
         Plan Plan);
 
     public static Plan BuildPlan(
@@ -49,6 +61,7 @@ public static class FxReceiptPayment
         var fluctuation = decimal.Round(outstanding - bankAmountGbp, 2, MidpointRounding.AwayFromZero);
         var companionNet = decimal.Round(-fluctuation, 2, MidpointRounding.AwayFromZero);
         var label = ReceiptOutstanding.FormatReceiptLabel(receipt.ReceiptNumber);
+        var description = CompanionDescription(label, companionNet);
 
         return new Plan(
             bookValueGbp,
@@ -57,8 +70,20 @@ public static class FxReceiptPayment
             fluctuation,
             companionNet,
             companionNet,
-            $"Loss/Gain on {label} due to exchange rate fluctuations",
+            description,
             forexNominalId);
+    }
+
+    /// <summary>
+    /// Precedent wording: "Loss on KF0xxxx due to exchange rate fluctuations" when the bank paid more
+    /// than book (positive companion net), "Gain on …" when the bank paid less (negative companion net).
+    /// </summary>
+    public static string CompanionDescription(string receiptLabel, decimal companionNetAmount)
+    {
+        if (string.IsNullOrWhiteSpace(receiptLabel))
+            throw new ArgumentException("receiptLabel is required.");
+        var kind = companionNetAmount >= 0 ? "Loss" : "Gain";
+        return $"{kind} on {receiptLabel.Trim()} due to exchange rate fluctuations";
     }
 
     public static Receipt2 CreateCompanionReceipt(
@@ -96,6 +121,14 @@ public static class FxReceiptPayment
         };
     }
 
+    /// <summary>Sets <see cref="Receipt2.Paid"/> to 1 on a loaded receipt (for UpdateReceipt2).</summary>
+    public static Receipt2 MarkPaid(Receipt2 receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        receipt.Paid = 1;
+        return receipt;
+    }
+
     public static async Task<Result> PostAsync(
         Plan plan,
         int receiptNumber,
@@ -108,6 +141,9 @@ public static class FxReceiptPayment
         Func<Payment, CancellationToken, Task<int>> insertPayment,
         Func<Receipt2, CancellationToken, Task<int>> insertReceipt,
         Func<int, CancellationToken, Task<Receipt2?>> loadReceiptByNumber,
+        Func<Receipt2, CancellationToken, Task> updateReceipt,
+        Func<int, CancellationToken, Task<IReadOnlyList<BankTransaction>>> getBankTransactions,
+        Func<int, CancellationToken, Task> deleteBankTransaction,
         Func<int, CancellationToken, Task> deletePayment,
         Func<int, CancellationToken, Task> deleteReceiptByNumber,
         CancellationToken cancellationToken)
@@ -117,6 +153,9 @@ public static class FxReceiptPayment
         ArgumentNullException.ThrowIfNull(insertPayment);
         ArgumentNullException.ThrowIfNull(insertReceipt);
         ArgumentNullException.ThrowIfNull(loadReceiptByNumber);
+        ArgumentNullException.ThrowIfNull(updateReceipt);
+        ArgumentNullException.ThrowIfNull(getBankTransactions);
+        ArgumentNullException.ThrowIfNull(deleteBankTransaction);
         ArgumentNullException.ThrowIfNull(deletePayment);
         ArgumentNullException.ThrowIfNull(deleteReceiptByNumber);
 
@@ -125,6 +164,10 @@ public static class FxReceiptPayment
         int? companionReceiptNumber = null;
         int? companionReceiptId = null;
         int? companionPaymentId = null;
+        IReadOnlyList<int> deletedBankTxIds = [];
+        IReadOnlyList<string> bankCleanupSkipped = [];
+        var sourceMarkedPaid = false;
+        bool? companionMarkedPaid = null;
 
         try
         {
@@ -140,13 +183,17 @@ public static class FxReceiptPayment
 
             if (plan.FluctuationAmount != 0)
             {
+                // Snapshot bank-feed ids before Other inserts so cleanup only touches new rows.
+                var before = await getBankTransactions(bankAccountId, cancellationToken);
+                var beforeIds = before.Select(tx => tx.ID).ToHashSet();
+
                 fluctuationPaymentId = await insertPayment(
                     ReceiptOutstanding.CreatePayment(
                         receiptNumber,
                         paymentDate,
                         plan.FluctuationAmount,
                         otherMethodId,
-                        bankAccountId,
+                        NonBankPayAccount,
                         FluctuationNote,
                         allowNonPositive: true),
                     cancellationToken);
@@ -164,11 +211,55 @@ public static class FxReceiptPayment
                         paymentDate,
                         plan.CompanionPaymentAmount,
                         otherMethodId,
-                        bankAccountId,
+                        NonBankPayAccount,
                         FluctuationNote,
                         allowNonPositive: true),
                     cancellationToken);
+
+                // Fallback: if SOAP still created Currency Fluctuation bank lines (e.g. PayAccount=0
+                // was remapped to a default bank), delete only safe single-sided new rows.
+                var after = await getBankTransactions(bankAccountId, cancellationToken);
+                var newIds = after.Select(tx => tx.ID).Where(id => !beforeIds.Contains(id)).ToHashSet();
+                var candidates = FxBankFeedCleanup.FindCandidates(
+                    after,
+                    paymentDate,
+                    plan.FluctuationAmount,
+                    FluctuationNote,
+                    newIds);
+                // Also consider rows that match criteria even if id was already present (shared-id case
+                // is refused inside FindCandidates when both moneyIn and moneyOut are set).
+                if (candidates.Count == 0)
+                {
+                    candidates = FxBankFeedCleanup.FindCandidates(
+                        after,
+                        paymentDate,
+                        plan.FluctuationAmount,
+                        FluctuationNote,
+                        onlyNewIds: null);
+                }
+
+                var cleanup = await FxBankFeedCleanup.DeleteSafeCandidatesAsync(
+                    candidates,
+                    deleteBankTransaction,
+                    cancellationToken);
+                deletedBankTxIds = cleanup.DeletedTransactionIds;
+                bankCleanupSkipped = cleanup.Skipped;
+
+                if (loaded is not null)
+                {
+                    await updateReceipt(MarkPaid(loaded), cancellationToken);
+                    companionMarkedPaid = true;
+                }
+                else
+                {
+                    companionMarkedPaid = false;
+                }
             }
+
+            var sourceAfter = await loadReceiptByNumber(receiptNumber, cancellationToken)
+                ?? throw new InvalidOperationException($"Purchase receipt {receiptNumber} was not found after payment.");
+            await updateReceipt(MarkPaid(sourceAfter), cancellationToken);
+            sourceMarkedPaid = true;
 
             return new Result(
                 bankPaymentId.Value,
@@ -176,6 +267,10 @@ public static class FxReceiptPayment
                 companionReceiptNumber,
                 companionReceiptId,
                 companionPaymentId,
+                deletedBankTxIds,
+                bankCleanupSkipped,
+                sourceMarkedPaid,
+                companionMarkedPaid,
                 plan);
         }
         catch (Exception failure)
