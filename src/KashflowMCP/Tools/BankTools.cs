@@ -31,4 +31,59 @@ public sealed class BankTools(KashFlowSession session)
     [McpServerTool(Name = "get_bank_tx_types"), Description("List bank transaction types.")]
     public async Task<string> GetBankTxTypes(CancellationToken cancellationToken)
         => JsonResults.Serialize(await session.Client.GetBankTxTypesAsync(cancellationToken));
+
+    [McpServerTool(Name = "search_bank_transactions"), Description("Find bank transactions across one or more bank accounts by amount and date range. Uses GetBankTransactions per account and filters client-side. Returns at most 200 matches.")]
+    public async Task<string> SearchBankTransactions(
+        [Description("Amount to match against moneyin and/or moneyout.")] decimal amount,
+        [Description("Inclusive start date (ISO-8601).")] DateTime dateFrom,
+        [Description("Inclusive end date (ISO-8601).")] DateTime dateTo,
+        [Description("Allowed absolute difference from amount. Defaults to 0.")] decimal tolerance = 0,
+        [Description("Which side to compare: in, out, or any (default).")] string? direction = null,
+        [Description("Bank account ids from get_bank_accounts. Optional when bankAccountCodes is set or when searching all accounts.")] int[]? bankAccountIds = null,
+        [Description("Bank account nominal codes from get_bank_accounts. Optional when bankAccountIds is set or when searching all accounts.")] int[]? bankAccountCodes = null,
+        CancellationToken cancellationToken = default)
+    {
+        var dir = BankTransactionSearch.ParseDirection(direction);
+        var accounts = BankTransactionSearch.ResolveAccounts(
+            bankAccountIds,
+            bankAccountCodes,
+            await session.Client.GetBankAccountsAsync(cancellationToken));
+
+        var remaining = BankTransactionSearch.DefaultMaxResults;
+        var matches = new List<BankTransactionSearch.Match>();
+        foreach (var account in accounts)
+        {
+            if (remaining <= 0)
+                break;
+            var transactions = await session.Client.GetBankTransactionsAsync(account.AccountID, cancellationToken);
+            matches.AddRange(BankTransactionSearch.Filter(
+                account,
+                transactions,
+                amount,
+                tolerance,
+                dir,
+                dateFrom,
+                dateTo,
+                BankTransactionSearch.DefaultMaxResults,
+                ref remaining));
+        }
+
+        return JsonResults.Serialize(new
+        {
+            matchCount = matches.Count,
+            truncated = remaining <= 0,
+            matches = matches.Select(match => new
+            {
+                bankAccountId = match.BankAccountId,
+                bankAccountCode = match.BankAccountCode,
+                bankAccountName = match.BankAccountName,
+                transactionId = match.TransactionId,
+                transactionDate = match.TransactionDate,
+                moneyIn = match.MoneyIn,
+                moneyOut = match.MoneyOut,
+                comment = match.Comment,
+                transactionType = match.TransactionType,
+            }),
+        });
+    }
 }

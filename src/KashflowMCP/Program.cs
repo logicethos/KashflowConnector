@@ -30,7 +30,7 @@ builder.Services.AddSingleton(new McpRuntimeOptions(session.ReadOnly));
 var mcp = builder.Services
     .AddMcpServer(o =>
     {
-        o.ServerInfo = new() { Name = "KashflowMCP", Version = "1.0.0" };
+        o.ServerInfo = new() { Name = "KashflowMCP", Version = "1.1.0" };
     })
     .WithStdioServerTransport()
     .WithTools<CompanyTools>()
