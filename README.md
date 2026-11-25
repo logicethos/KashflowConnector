@@ -22,7 +22,7 @@ Authentication is the **SOAP API username and password**. It is not the REST “
 `KashFlow__ReadOnly` defaults to **true**.
 
 - **true** (the marketplace default): only read tools are registered (`get_*`, `is_*`, `search_*`). The SOAP client also refuses every call that would change KashFlow.
-- **false**: write tools are registered as well: `insert_customer`, `insert_supplier`, `insert_invoice`, `insert_receipt2`, `insert_journal`, and `insert_receipt_payment`.
+- **false**: write tools are registered as well: `insert_customer`, `insert_supplier`, `insert_invoice`, `insert_receipt2`, `insert_journal`, `insert_receipt_payment`, and `transfer_between_bank_accounts`.
 
 Each write tool takes a structured object with documented fields (name, addresses, lines, nominals, and so on). You can still pass the previous full SOAP JSON string (`customerJson`, `supplierJson`, `invoiceJson`, `receiptJson`, `journalJson`). When that string is set, it is used and the structured fields are ignored, so extra text and checkbox fields on Customer still work.
 
@@ -65,7 +65,27 @@ Not exposed, because they are not accounting-record operations or they duplicate
 - `SageFile`, `SageFileImport`, `GetDigitaCSVFile`, and `VCFToCustomerObjects` are file or binary payloads.
 - `*TypeDefined` operations are the legacy duplicate of the operation without that suffix (`GetInvoice` rather than `GetInvoice_TypeDefined`, and the same for invoices, receipts, and account defaults).
 
-Sales invoice payments are `insert_invoice_payment` (`Payment`: `payInvoice` is the invoice number, `payMethod` the method id, `payAccount` the bank account id, `payAmount` the amount), `get_invoice_payments`, and `delete_invoice_payment` (`invoiceNumber`, `invoicePaymentNumber`). Purchase payment removal is `delete_receipt_payment` (`receiptPaymentNumber`). Bank transactions are `get_bank_transactions`, `insert_bank_transaction`, `update_bank_transaction`, and `delete_bank_transaction`.
+Sales invoice payments are `insert_invoice_payment` (`Payment`: `payInvoice` is the invoice number, `payMethod` the method id, `payAccount` the bank account id, `payAmount` the amount), `get_invoice_payments`, and `delete_invoice_payment` (`invoiceNumber`, `invoicePaymentNumber`). Purchase payment removal is `delete_receipt_payment` (`receiptPaymentNumber`). A single bank transaction is `insert_bank_transaction` (plus `update_bank_transaction` and `delete_bank_transaction`). That generated tool is the only single-sided insert.
+
+## Bank transfers
+
+KashFlow's SOAP API has no transfer operation. `transfer_between_bank_accounts` is this server's own write. It is available only when `KashFlow__ReadOnly` is false. It does not replace `insert_bank_transaction`. It calls that same SOAP operation twice:
+
+- source account: `moneyout` = amount
+- destination account: `moneyin` = amount
+
+Both use the same date, comment, and transaction type. If the destination post fails, the source transaction is deleted. Nominal codes such as 1206 and 1209 go through the same account-code lookup as `insert_receipt_payment`.
+
+| Parameter | Required | Meaning |
+| --- | --- | --- |
+| `amount` | yes | Amount to move, greater than 0. |
+| `transferDate` | yes | Date on both transactions. |
+| `fromBankAccountId` | one of id or code | `accountId` from `get_bank_accounts`. |
+| `fromBankAccountCode` | one of id or code | Nominal code such as 1206. Used when the id is omitted. |
+| `toBankAccountId` | one of id or code | Destination `accountId`. |
+| `toBankAccountCode` | one of id or code | Destination nominal code such as 1209. |
+| `transactionTypeId` | no | Type id from `get_bank_tx_types`. Defaults to the type named Transfer or Bank Transfer. |
+| `comment` | no | Stored on both transactions. |
 
 ## Configuration
 

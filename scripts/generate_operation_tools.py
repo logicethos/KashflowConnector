@@ -247,7 +247,8 @@ def main() -> None:
                 f'{method["operation"]}: legacy TypeDefined duplicate of {sibling}'
             )
             continue
-        if full in wrapped:
+        # transfer_between_bank_accounts calls these. They stay as their own tools.
+        if full in wrapped and full not in {"InsertBankTransactionAsync", "DeleteBankTransactionAsync"}:
             skipped.append(f'{method["operation"]}: already wrapped by a hand-written tool')
             continue
         tool = snake(method["operation"])
