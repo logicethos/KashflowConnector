@@ -22,9 +22,33 @@ Authentication is the **SOAP API username and password**. It is not the REST “
 `KashFlow__ReadOnly` defaults to **true**.
 
 - **true** (the marketplace default): only read tools are registered (`get_*`, `is_*`, `search_*`). The SOAP client also refuses every call that would change KashFlow.
-- **false**: the five write tools are registered as well: `insert_customer`, `insert_supplier`, `insert_invoice`, `insert_receipt2`, `insert_journal`.
+- **false**: write tools are registered as well: `insert_customer`, `insert_supplier`, `insert_invoice`, `insert_receipt2`, `insert_journal`, and `insert_receipt_payment`.
 
 Each write tool takes a structured object with documented fields (name, addresses, lines, nominals, and so on). You can still pass the previous full SOAP JSON string (`customerJson`, `supplierJson`, `invoiceJson`, `receiptJson`, `journalJson`). When that string is set, it is used and the structured fields are ignored, so extra text and checkbox fields on Customer still work.
+
+## Purchase receipt payments
+
+These tools record money paid against a purchase receipt (a supplier bill), not a sales invoice.
+
+| Tool | Access | Purpose |
+| --- | --- | --- |
+| `get_bank_accounts` | read | Bank accounts. `accountId` is the internal id. `accountCode` is the nominal code (1206, 1209, …). `accountName` is the label. |
+| `get_receipt_payment_methods` | read | Methods for receipt payments. `methodId` and `methodName`. |
+| `get_receipt_payments` | read | Payments already on a receipt number, so a receipt is not paid twice. |
+| `insert_receipt_payment` | write (`KashFlow__ReadOnly=false`) | SOAP `InsertReceiptPayment`. |
+
+`insert_receipt_payment` parameters:
+
+- `receiptNumber` (integer, required) — purchase receipt number. Sent as `PayInvoice`.
+- `paymentDate` (date-time, required) — sent as `PayDate`.
+- `amount` (number, required, greater than 0) — sent as `PayAmount`.
+- `paymentMethodId` (integer, optional) — `methodId` from `get_receipt_payment_methods`. Sent as `PayMethod`.
+- `paymentMethodName` (string, optional) — used only when `paymentMethodId` is omitted.
+- `bankAccountId` (integer, optional) — `accountId` from `get_bank_accounts`. Sent as `PayAccount`.
+- `bankAccountCode` (integer, optional) — nominal code such as 1206. Resolved to `accountId`. Used only when `bankAccountId` is omitted.
+- `note` (string, optional) — sent as `PayNote`.
+
+One of `paymentMethodId` or `paymentMethodName` is required. One of `bankAccountId` or `bankAccountCode` is required. When both forms are sent, the id is used.
 
 ## Configuration
 

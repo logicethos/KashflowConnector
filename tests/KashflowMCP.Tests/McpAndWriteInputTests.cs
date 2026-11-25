@@ -290,8 +290,12 @@ public class McpToolsListTests
         var names = tools.Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
         Assert.Contains("get_customers", names);
         Assert.Contains("get_invoice", names);
+        Assert.Contains("get_bank_accounts", names);
+        Assert.Contains("get_receipt_payments", names);
+        Assert.Contains("get_receipt_payment_methods", names);
         Assert.DoesNotContain("insert_customer", names);
         Assert.DoesNotContain("insert_invoice", names);
+        Assert.DoesNotContain("insert_receipt_payment", names);
 
         var joined = string.Join("\n", stderr);
         Assert.Contains("Password is never logged.", joined, StringComparison.Ordinal);
@@ -336,6 +340,16 @@ public class McpToolsListTests
         AssertWriteSchema(tools["insert_invoice"], "invoice", "invoiceJson", "customerId", "lines", "currencyCode");
         AssertWriteSchema(tools["insert_receipt2"], "receipt", "receiptJson", "supplierId", "lines", "currencyCode");
         AssertWriteSchema(tools["insert_journal"], "journal", "journalJson", "journalDate", "lines", "comment");
+        var receiptPayment = tools["insert_receipt_payment"].JsonSchema;
+        foreach (var field in new[]
+        {
+            "receiptNumber", "paymentDate", "amount", "paymentMethodId", "paymentMethodName",
+            "bankAccountId", "bankAccountCode", "note",
+        })
+        {
+            Assert.True(receiptPayment.GetProperty("properties").TryGetProperty(field, out var property), field);
+            Assert.True(property.TryGetProperty("description", out var fieldDescription) && fieldDescription.GetString()!.Length > 0, field);
+        }
 
         var customer = ResolveSchema(tools["insert_customer"].JsonSchema, Property(tools["insert_customer"].JsonSchema, "properties", "customer"));
         var name = ResolveSchema(tools["insert_customer"].JsonSchema, Property(customer, "properties", "name"));
