@@ -63,6 +63,38 @@ public class AllocateBankPaymentTests
     }
 
     [Fact]
+    public void Validate_uses_gbp_book_outstanding_for_foreign_currency_receipts()
+    {
+        // €21.49 at 1.1941 → book £18.00; allocating the foreign total must fail,
+        // while allocating the GBP book value is allowed.
+        var receipts = new Dictionary<int, Receipt2>
+        {
+            [4189] = new()
+            {
+                ReceiptNumber = 4189,
+                NetAmount = 21.49m,
+                VATAmount = 0m,
+                AmountPaid = 0m,
+                CurrencyCode = "EUR",
+                ExchangeRate = 1.1941m,
+            },
+        };
+
+        var over = Assert.Throws<ArgumentException>(() => AllocateBankPayment.Validate(
+            21.49m,
+            [new(4189, 21.49m)],
+            receipts));
+        Assert.Contains("exceeds outstanding", over.Message, StringComparison.Ordinal);
+
+        var planned = AllocateBankPayment.Validate(
+            18.00m,
+            [new(4189, 18.00m)],
+            receipts);
+        Assert.Single(planned);
+        Assert.Equal(18.00m, planned[0].OutstandingBefore);
+    }
+
+    [Fact]
     public async Task Post_keeps_earlier_successes_when_a_later_insert_fails()
     {
         var planned = new List<AllocateBankPayment.PlannedPayment>

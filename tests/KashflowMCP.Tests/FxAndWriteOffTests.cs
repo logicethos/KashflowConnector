@@ -17,12 +17,125 @@ public class FxAndWriteOffTests
             VATAmount = 0m,
             AmountPaid = 0m,
             CurrencyCode = "USD",
+            // ExchangeRate unset (0): book value falls back to net+VAT for non-FX fixtures.
         };
+
+    /// <summary>Hetzner KF04189: €21.49 at 1.1941 → book £18.00.</summary>
+    private static Receipt2 HetznerReceipt()
+        => new()
+        {
+            ReceiptNumber = 4189,
+            Supplier = "Hetzner",
+            SupplierId = 30,
+            NetAmount = 21.49m,
+            VATAmount = 0m,
+            AmountPaid = 0m,
+            CurrencyCode = "EUR",
+            ExchangeRate = 1.1941m,
+        };
+
+    /// <summary>Cursor KF04195: $192 at 1.3123 → book £146.31.</summary>
+    private static Receipt2 CursorReceipt()
+        => new()
+        {
+            ReceiptNumber = 4195,
+            Supplier = "Cursor",
+            SupplierId = 31,
+            NetAmount = 192m,
+            VATAmount = 0m,
+            AmountPaid = 0m,
+            CurrencyCode = "USD",
+            ExchangeRate = 1.3123m,
+        };
+
+    /// <summary>Precedent KF04151: €21.49 at 1.1686 → book £18.39.</summary>
+    private static Receipt2 PrecedentReceipt()
+        => new()
+        {
+            ReceiptNumber = 4151,
+            Supplier = "Precedent",
+            SupplierId = 32,
+            NetAmount = 21.49m,
+            VATAmount = 0m,
+            AmountPaid = 0m,
+            CurrencyCode = "EUR",
+            ExchangeRate = 1.1686m,
+        };
+
+    [Theory]
+    [InlineData(21.49, 0, 1.1941, 18.00)]   // Hetzner
+    [InlineData(192, 0, 1.3123, 146.31)]     // Cursor
+    [InlineData(21.49, 0, 1.1686, 18.39)]    // Precedent
+    public void Book_value_gbp_is_foreign_total_divided_by_exchange_rate(
+        decimal net,
+        decimal vat,
+        decimal rate,
+        decimal expectedBook)
+    {
+        var receipt = new Receipt2
+        {
+            NetAmount = net,
+            VATAmount = vat,
+            ExchangeRate = rate,
+            CurrencyCode = "EUR",
+        };
+        Assert.Equal(expectedBook, ReceiptOutstanding.BookValueGbp(receipt));
+        Assert.Equal(expectedBook, ReceiptOutstanding.Balance(receipt));
+    }
+
+    [Fact]
+    public void Hetzner_KF04189_bank_18_41_yields_fluctuation_minus_0_41_and_companion_loss()
+    {
+        var plan = FxReceiptPayment.BuildPlan(HetznerReceipt(), bankAmountGbp: 18.41m, forexNominalId: 956);
+        Assert.Equal(18.00m, plan.BookValueGbp);
+        Assert.Equal(18.00m, plan.OutstandingBefore);
+        Assert.Equal(18.41m, plan.BankAmountGbp);
+        Assert.Equal(-0.41m, plan.FluctuationAmount);
+        Assert.Equal(0.41m, plan.CompanionNetAmount);
+        Assert.Equal(0.41m, plan.CompanionPaymentAmount);
+        Assert.Equal("Loss/Gain on KF04189 due to exchange rate fluctuations", plan.CompanionDescription);
+    }
+
+    [Fact]
+    public void Cursor_KF04195_bank_148_11_yields_fluctuation_minus_1_80_and_companion_loss()
+    {
+        var plan = FxReceiptPayment.BuildPlan(CursorReceipt(), bankAmountGbp: 148.11m, forexNominalId: 956);
+        Assert.Equal(146.31m, plan.BookValueGbp);
+        Assert.Equal(146.31m, plan.OutstandingBefore);
+        Assert.Equal(148.11m, plan.BankAmountGbp);
+        Assert.Equal(-1.80m, plan.FluctuationAmount);
+        Assert.Equal(1.80m, plan.CompanionNetAmount);
+        Assert.Equal(1.80m, plan.CompanionPaymentAmount);
+        Assert.Equal("Loss/Gain on KF04195 due to exchange rate fluctuations", plan.CompanionDescription);
+    }
+
+    [Fact]
+    public void Precedent_KF04151_bank_18_61_yields_fluctuation_minus_0_22_and_companion_loss()
+    {
+        var plan = FxReceiptPayment.BuildPlan(PrecedentReceipt(), bankAmountGbp: 18.61m, forexNominalId: 956);
+        Assert.Equal(18.39m, plan.BookValueGbp);
+        Assert.Equal(18.39m, plan.OutstandingBefore);
+        Assert.Equal(18.61m, plan.BankAmountGbp);
+        Assert.Equal(-0.22m, plan.FluctuationAmount);
+        Assert.Equal(0.22m, plan.CompanionNetAmount);
+        Assert.Equal(0.22m, plan.CompanionPaymentAmount);
+        Assert.Equal("Loss/Gain on KF04151 due to exchange rate fluctuations", plan.CompanionDescription);
+    }
+
+    [Fact]
+    public void Balance_subtracts_gbp_amount_paid_from_book_value()
+    {
+        var receipt = HetznerReceipt();
+        receipt.AmountPaid = 10m;
+        Assert.Equal(18.00m, ReceiptOutstanding.BookValueGbp(receipt));
+        Assert.Equal(8.00m, ReceiptOutstanding.Balance(receipt));
+    }
 
     [Fact]
     public void Fx_plan_uses_outstanding_minus_bank_amount_and_companion_opposite_sign()
     {
         var plan = FxReceiptPayment.BuildPlan(SourceReceipt(), bankAmountGbp: 95m, forexNominalId: 999);
+        Assert.Equal(100m, plan.BookValueGbp);
         Assert.Equal(100m, plan.OutstandingBefore);
         Assert.Equal(5m, plan.FluctuationAmount);
         Assert.Equal(-5m, plan.CompanionNetAmount);
@@ -117,6 +230,34 @@ public class FxAndWriteOffTests
         Assert.Equal(0.03m, plan.PaymentAmount);
         Assert.Equal(3, plan.BankAccountId);
         Assert.Equal(9, plan.OtherMethodId);
+    }
+
+    [Fact]
+    public void Write_off_uses_gbp_outstanding_for_foreign_currency_receipt()
+    {
+        var accounts = new List<BankAccount>
+        {
+            new() { AccountID = 3, AccountCode = 790, AccountName = "Rounding" },
+        };
+        var methods = new List<PaymentMethod>
+        {
+            new() { MethodID = 9, MethodName = "Other" },
+        };
+
+        // Book £18.00, paid £17.97 → GBP outstanding £0.03 (not foreign € remainder).
+        var receipt = HetznerReceipt();
+        receipt.AmountPaid = 17.97m;
+        var plan = ReceiptRoundingWriteOff.BuildPlan(receipt, 790, 0.05m, accounts, methods);
+        Assert.Equal(0.03m, plan.Outstanding);
+        Assert.Equal(0.03m, plan.PaymentAmount);
+
+        // Foreign remainder without GBP conversion would look huge and must be rejected.
+        Assert.Throws<ArgumentException>(() => ReceiptRoundingWriteOff.BuildPlan(
+            HetznerReceipt(),
+            790,
+            0.05m,
+            accounts,
+            methods));
     }
 
     [Fact]

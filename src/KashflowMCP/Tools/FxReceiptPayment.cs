@@ -12,6 +12,7 @@ public static class FxReceiptPayment
     public const string FluctuationNote = "Currency Fluctuation";
 
     public sealed record Plan(
+        decimal BookValueGbp,
         decimal OutstandingBefore,
         decimal BankAmountGbp,
         decimal FluctuationAmount,
@@ -41,12 +42,16 @@ public static class FxReceiptPayment
         if (forexNominalId <= 0)
             throw new ArgumentException("forexNominalId must be a get_nominal_codes id.");
 
+        // Outstanding is GBP book value (foreign total / ExchangeRate) minus GBP already paid —
+        // never the foreign net+VAT figure. Bank and fluctuation lines are also in GBP.
+        var bookValueGbp = ReceiptOutstanding.BookValueGbp(receipt);
         var outstanding = ReceiptOutstanding.Balance(receipt);
         var fluctuation = decimal.Round(outstanding - bankAmountGbp, 2, MidpointRounding.AwayFromZero);
         var companionNet = decimal.Round(-fluctuation, 2, MidpointRounding.AwayFromZero);
         var label = ReceiptOutstanding.FormatReceiptLabel(receipt.ReceiptNumber);
 
         return new Plan(
+            bookValueGbp,
             outstanding,
             decimal.Round(bankAmountGbp, 2, MidpointRounding.AwayFromZero),
             fluctuation,

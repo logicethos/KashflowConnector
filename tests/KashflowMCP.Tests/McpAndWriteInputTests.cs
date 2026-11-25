@@ -393,7 +393,7 @@ public class McpToolsListTests
         foreach (var field in new[]
                  {
                      "paymentDate", "totalAmount", "allocations", "bankAccountId", "bankAccountCode",
-                     "paymentMethodId", "paymentMethodName", "note",
+                     "paymentMethodId", "paymentMethodName", "note", "dryRun",
                  })
             Assert.True(allocate.TryGetProperty(field, out _), field);
 
@@ -401,12 +401,12 @@ public class McpToolsListTests
         foreach (var field in new[]
                  {
                      "receiptNumber", "paymentDate", "bankAmountGbp", "bankAccountId", "bankAccountCode",
-                     "paymentMethodId", "paymentMethodName", "note",
+                     "paymentMethodId", "paymentMethodName", "note", "dryRun",
                  })
             Assert.True(fx.TryGetProperty(field, out _), field);
 
         var writeOff = tools["write_off_receipt_rounding"].JsonSchema.GetProperty("properties");
-        foreach (var field in new[] { "receiptNumber", "paymentDate", "nominal", "maxAmount", "note" })
+        foreach (var field in new[] { "receiptNumber", "paymentDate", "nominal", "maxAmount", "note", "dryRun" })
             Assert.True(writeOff.TryGetProperty(field, out _), field);
 
         Assert.Contains("search_bank_transactions", tools.Keys);

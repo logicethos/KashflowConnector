@@ -3,7 +3,8 @@ using KashFlow;
 namespace KashflowMCP.Tools;
 
 /// <summary>
-/// Posts a small balancing receipt payment so a near-zero outstanding balance shows as paid.
+/// Posts a small balancing receipt payment so a near-zero GBP outstanding balance shows as paid.
+/// Outstanding uses <see cref="ReceiptOutstanding.Balance"/> (GBP book value minus AmountPaid).
 /// The balancing amount is attributed through a bank account whose <see cref="BankAccount.AccountCode"/>
 /// matches the given nominal code (payment method Other).
 /// </summary>

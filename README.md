@@ -99,7 +99,7 @@ The destination nominal id is resolved from `toBankAccountId` / `toBankAccountCo
 
 ### `allocate_bank_payment_to_receipts`
 
-Add-only. Validates before writing: allocations must sum exactly to `totalAmount` (to the penny), receipt numbers must be unique, each receipt must exist, and no allocation may exceed that receipt's outstanding balance (`net + VAT - amountPaid`). Then calls `InsertReceiptPayment` once per allocation. If a later insert fails, earlier successes are left in place and listed so they can be undone with `delete_receipt_payment`.
+Add-only. Validates before writing: allocations must sum exactly to `totalAmount` (to the penny), receipt numbers must be unique, each receipt must exist, and no allocation may exceed that receipt's **GBP outstanding** (book GBP value minus `AmountPaid`; for foreign-currency receipts the book value is `(net + VAT) / ExchangeRate` rounded to 2dp). Then calls `InsertReceiptPayment` once per allocation. If a later insert fails, earlier successes are left in place and listed so they can be undone with `delete_receipt_payment`.
 
 | Parameter | Required | Meaning |
 | --- | --- | --- |
@@ -109,6 +109,7 @@ Add-only. Validates before writing: allocations must sum exactly to `totalAmount
 | `bankAccountId` / `bankAccountCode` | one | Paying bank account. |
 | `paymentMethodId` / `paymentMethodName` | one | Payment method. |
 | `note` | no | Stored on every payment. |
+| `dryRun` | no | When `true`, validate and return the planned payments without writing. Default `false`. |
 
 ### `search_bank_transactions`
 
@@ -124,19 +125,31 @@ Read tool. Calls `GetBankTransactions` for each selected bank account (or all ac
 
 ### `insert_fx_receipt_payment`
 
-Add-only booking for a foreign-currency purchase receipt paid from a GBP bank account (the Logic Ethos pattern used on pairs such as KF04151/4165):
+Add-only booking for a foreign-currency purchase receipt paid from a GBP bank account (the Logic Ethos pattern used on pairs such as KF04151/4165).
+
+Receipt payment lines are in **GBP** against the receipt's GBP book value. For an FX `Receipt2`, book value = `(NetAmount + VATAmount) / ExchangeRate` rounded to 2dp (e.g. €21.49 at 1.1941 → £18.00). Outstanding = book value − GBP `AmountPaid`. Do not subtract the bank GBP amount from the foreign net+VAT total.
 
 1. `InsertReceiptPayment` for `bankAmountGbp` from the bank account.
-2. An **Other** payment on the same receipt with note `Currency Fluctuation` for `outstanding - bankAmountGbp` (may be negative).
-3. A companion GBP purchase receipt for the same supplier on nominal **956** (Forex Gain/Loss), description `Loss/Gain on KF##### due to exchange rate fluctuations`, net = `-(step 2 amount)`, paid in full as Other with that same companion amount.
+2. An **Other** payment on the same receipt with note `Currency Fluctuation` for `outstandingGbp - bankAmountGbp` (may be negative; e.g. book £18.00, bank £18.41 → −£0.41).
+3. A companion GBP purchase receipt for the same supplier on nominal **956** (Forex Gain/Loss), description `Loss/Gain on KF##### due to exchange rate fluctuations`, net = `-(step 2 amount)`, paid in full as Other with that same companion amount (a loss when the bank paid more than book).
 
 If a later step fails, payments and the companion receipt created by this call are deleted when possible.
+
+| Parameter | Required | Meaning |
+| --- | --- | --- |
+| `receiptNumber` | yes | Purchase receipt number. |
+| `paymentDate` | yes | Payment and companion receipt date. |
+| `bankAmountGbp` | yes | GBP amount that left the bank. |
+| `bankAccountId` / `bankAccountCode` | one | Paying bank account. |
+| `paymentMethodId` / `paymentMethodName` | one | Method for the bank payment line. |
+| `note` | no | Note on the bank payment line. |
+| `dryRun` | no | When `true`, return every line that would be posted (bank, fluctuation, companion receipt + payment) without writing. Default `false`. |
 
 ### `write_off_receipt_rounding`
 
 Add-only. Posts a balancing `InsertReceiptPayment` so a near-zero outstanding shows as paid.
 
-- Outstanding = `net + VAT - amountPaid`.
+- Outstanding = GBP book value − `AmountPaid` (same helper as FX/allocate: for FX receipts book value is `(net + VAT) / ExchangeRate`).
 - Refuses when outstanding is 0 or `abs(outstanding) > maxAmount` (default `0.05`).
 - **Nominal attribution:** `nominal` is required (no default). It must be a `get_bank_accounts` `accountCode` (a bank/cash account mapped to that nominal). The payment uses method **Other** and `payAccount` = that account's `accountId`. Create or pick such an account in KashFlow before calling this tool.
 
@@ -147,6 +160,7 @@ Add-only. Posts a balancing `InsertReceiptPayment` so a near-zero outstanding sh
 | `nominal` | yes | Bank `accountCode` / nominal code used as `payAccount`. |
 | `maxAmount` | no | Max absolute outstanding (default 0.05). |
 | `note` | no | Payment note (default `Rounding write-off`). |
+| `dryRun` | no | When `true`, return the balancing payment without writing. Default `false`. |
 
 ## Configuration
 

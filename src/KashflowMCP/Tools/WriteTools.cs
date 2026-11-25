@@ -165,7 +165,7 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
         });
     }
 
-    [McpServerTool(Name = "allocate_bank_payment_to_receipts"), Description("Split one bank payment across several purchase receipts. Validates that allocations sum exactly to totalAmount, receipt numbers are unique, each receipt exists, and no allocation exceeds that receipt's outstanding balance, then calls InsertReceiptPayment once per allocation. Add-only: never updates or deletes existing payments. Requires KashFlow__ReadOnly=false. If a later insert fails, earlier successes are left in place and returned so they can be undone with delete_receipt_payment.")]
+    [McpServerTool(Name = "allocate_bank_payment_to_receipts"), Description("Split one bank payment across several purchase receipts. Validates that allocations sum exactly to totalAmount, receipt numbers are unique, each receipt exists, and no allocation exceeds that receipt's GBP outstanding balance (book GBP value minus AmountPaid; for FX receipts book value is (net+VAT)/ExchangeRate), then calls InsertReceiptPayment once per allocation. Add-only: never updates or deletes existing payments. Requires KashFlow__ReadOnly=false unless dryRun=true. If a later insert fails, earlier successes are left in place and returned so they can be undone with delete_receipt_payment.")]
     public async Task<string> AllocateBankPaymentToReceipts(
         [Description("Payment date (ISO-8601) stored on every InsertReceiptPayment.")] DateTime paymentDate,
         [Description("Bank amount being allocated. Must equal the sum of allocations to the penny.")] decimal totalAmount,
@@ -175,9 +175,11 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
         [Description("Payment method id from get_receipt_payment_methods. Optional when paymentMethodName is set.")] int? paymentMethodId = null,
         [Description("Payment method name from get_receipt_payment_methods. Used only when paymentMethodId is omitted.")] string? paymentMethodName = null,
         [Description("Optional note stored on every payment.")] string? note = null,
+        [Description("When true, validate and return the planned payments without writing. Default false.")] bool dryRun = false,
         CancellationToken cancellationToken = default)
     {
-        ToolGuard.EnsureWritable(runtime);
+        if (!dryRun)
+            ToolGuard.EnsureWritable(runtime);
         ArgumentNullException.ThrowIfNull(allocations);
 
         var methodId = paymentMethodId is int givenMethod && givenMethod > 0
@@ -216,6 +218,32 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
             allocations.Select(item => new AllocateBankPayment.Allocation(item.ReceiptNumber, item.Amount)).ToList(),
             receipts);
 
+        if (dryRun)
+        {
+            return JsonResults.Serialize(new
+            {
+                dryRun = true,
+                totalAmount,
+                payAccount = accountId,
+                payMethod = methodId,
+                note,
+                paymentDate,
+                payments = planned.Select(item =>
+                {
+                    receipts.TryGetValue(item.ReceiptNumber, out var receipt);
+                    return new
+                    {
+                        receiptNumber = item.ReceiptNumber,
+                        amount = item.Amount,
+                        bookValueGbp = receipt is null ? (decimal?)null : ReceiptOutstanding.BookValueGbp(receipt),
+                        outstandingBefore = item.OutstandingBefore,
+                        currencyCode = receipt?.CurrencyCode,
+                        exchangeRate = receipt?.ExchangeRate,
+                    };
+                }),
+            });
+        }
+
         var (succeeded, failure) = await AllocateBankPayment.PostAsync(
             planned,
             paymentDate,
@@ -246,7 +274,7 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
         });
     }
 
-    [McpServerTool(Name = "insert_fx_receipt_payment"), Description("Pay a foreign-currency purchase receipt from a GBP bank account. Add-only. (1) InsertReceiptPayment for bankAmountGbp from the bank account. (2) An Other payment on the same receipt labelled Currency Fluctuation for outstanding - bankAmountGbp (may be negative). (3) A companion GBP purchase receipt for the same supplier on nominal 956 (Forex Gain/Loss), description Loss/Gain on KF##### due to exchange rate fluctuations, paid in full as Other with the opposite sign to (2). Requires KashFlow__ReadOnly=false. If a later step fails, earlier rows created by this call are deleted when possible.")]
+    [McpServerTool(Name = "insert_fx_receipt_payment"), Description("Pay a foreign-currency purchase receipt from a GBP bank account. Add-only. Outstanding is the GBP book value ((net+VAT)/ExchangeRate) minus GBP AmountPaid. (1) InsertReceiptPayment for bankAmountGbp from the bank account. (2) An Other payment on the same receipt labelled Currency Fluctuation for outstanding - bankAmountGbp (may be negative). (3) A companion GBP purchase receipt for the same supplier on nominal 956 (Forex Gain/Loss), description Loss/Gain on KF##### due to exchange rate fluctuations, paid in full as Other with the opposite sign to (2). Requires KashFlow__ReadOnly=false unless dryRun=true. If a later step fails, earlier rows created by this call are deleted when possible.")]
     public async Task<string> InsertFxReceiptPayment(
         [Description("Purchase receipt number.")] int receiptNumber,
         [Description("Payment and companion receipt date (ISO-8601).")] DateTime paymentDate,
@@ -256,9 +284,11 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
         [Description("Payment method id for the bank payment. Optional when paymentMethodName is set.")] int? paymentMethodId = null,
         [Description("Payment method name for the bank payment. Used only when paymentMethodId is omitted.")] string? paymentMethodName = null,
         [Description("Optional note on the bank payment line.")] string? note = null,
+        [Description("When true, compute and return every line that would be posted without writing. Default false.")] bool dryRun = false,
         CancellationToken cancellationToken = default)
     {
-        ToolGuard.EnsureWritable(runtime);
+        if (!dryRun)
+            ToolGuard.EnsureWritable(runtime);
 
         var receipt = await session.Client.GetReceipt2Async(receiptNumber, cancellationToken)
             ?? throw new ArgumentException($"Purchase receipt {receiptNumber} was not found.");
@@ -280,6 +310,65 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
             await session.Client.GetNominalCodesAsync(cancellationToken));
 
         var plan = FxReceiptPayment.BuildPlan(receipt, bankAmountGbp, forexNominalId);
+
+        if (dryRun)
+        {
+            object? companionReceipt = null;
+            object? companionPayment = null;
+            object? fluctuationPayment = null;
+            if (plan.FluctuationAmount != 0)
+            {
+                fluctuationPayment = new
+                {
+                    receiptNumber,
+                    amount = plan.FluctuationAmount,
+                    payMethod = otherMethodId,
+                    payAccount = accountId,
+                    note = FxReceiptPayment.FluctuationNote,
+                };
+                companionReceipt = new
+                {
+                    supplier = receipt.Supplier,
+                    supplierId = receipt.SupplierId,
+                    currencyCode = "GBP",
+                    exchangeRate = 1m,
+                    netAmount = plan.CompanionNetAmount,
+                    vatAmount = 0m,
+                    nominalCode = FxReceiptPayment.ForexNominalCode,
+                    forexNominalId,
+                    description = plan.CompanionDescription,
+                };
+                companionPayment = new
+                {
+                    amount = plan.CompanionPaymentAmount,
+                    payMethod = otherMethodId,
+                    payAccount = accountId,
+                    note = FxReceiptPayment.FluctuationNote,
+                };
+            }
+
+            return JsonResults.Serialize(new
+            {
+                dryRun = true,
+                receiptNumber,
+                currencyCode = receipt.CurrencyCode,
+                exchangeRate = receipt.ExchangeRate,
+                bookValueGbp = plan.BookValueGbp,
+                outstandingBefore = plan.OutstandingBefore,
+                bankPayment = new
+                {
+                    receiptNumber,
+                    amount = plan.BankAmountGbp,
+                    payMethod = bankMethodId,
+                    payAccount = accountId,
+                    note,
+                },
+                fluctuationPayment,
+                companionReceipt,
+                companionPayment,
+            });
+        }
+
         var result = await FxReceiptPayment.PostAsync(
             plan,
             receiptNumber,
@@ -304,6 +393,7 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
             companionReceiptNumber = result.CompanionReceiptNumber,
             companionReceiptId = result.CompanionReceiptId,
             companionPaymentId = result.CompanionPaymentId,
+            bookValueGbp = result.Plan.BookValueGbp,
             outstandingBefore = result.Plan.OutstandingBefore,
             bankAmountGbp = result.Plan.BankAmountGbp,
             fluctuationAmount = result.Plan.FluctuationAmount,
@@ -311,16 +401,18 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
         });
     }
 
-    [McpServerTool(Name = "write_off_receipt_rounding"), Description("Post a small balancing InsertReceiptPayment so a purchase receipt shows as paid. Requires KashFlow__ReadOnly=false. Computes outstanding = net + VAT - amountPaid, refuses when the balance is zero or abs(balance) > maxAmount (default 0.05), then posts that balance as method Other against the bank account whose accountCode equals the required nominal code. Add-only.")]
+    [McpServerTool(Name = "write_off_receipt_rounding"), Description("Post a small balancing InsertReceiptPayment so a purchase receipt shows as paid. Requires KashFlow__ReadOnly=false unless dryRun=true. Computes GBP outstanding = book GBP value minus AmountPaid (for FX receipts book value is (net+VAT)/ExchangeRate), refuses when the balance is zero or abs(balance) > maxAmount (default 0.05), then posts that balance as method Other against the bank account whose accountCode equals the required nominal code. Add-only.")]
     public async Task<string> WriteOffReceiptRounding(
         [Description("Purchase receipt number.")] int receiptNumber,
         [Description("Payment date (ISO-8601).")] DateTime paymentDate,
         [Description("Nominal / bank account code that must match a get_bank_accounts accountCode. Required; no default.")] int nominal,
         [Description("Maximum absolute outstanding allowed. Defaults to 0.05.")] decimal maxAmount = 0.05m,
         [Description("Optional payment note.")] string? note = null,
+        [Description("When true, compute and return the balancing payment without writing. Default false.")] bool dryRun = false,
         CancellationToken cancellationToken = default)
     {
-        ToolGuard.EnsureWritable(runtime);
+        if (!dryRun)
+            ToolGuard.EnsureWritable(runtime);
 
         var receipt = await session.Client.GetReceipt2Async(receiptNumber, cancellationToken)
             ?? throw new ArgumentException($"Purchase receipt {receiptNumber} was not found.");
@@ -332,13 +424,33 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
             await session.Client.GetBankAccountsAsync(cancellationToken),
             await session.Client.GetRecPayMethodsAsync(cancellationToken));
 
+        var paymentNote = note ?? "Rounding write-off";
+        if (dryRun)
+        {
+            return JsonResults.Serialize(new
+            {
+                dryRun = true,
+                receiptNumber,
+                currencyCode = receipt.CurrencyCode,
+                exchangeRate = receipt.ExchangeRate,
+                bookValueGbp = ReceiptOutstanding.BookValueGbp(receipt),
+                outstandingBefore = plan.Outstanding,
+                amount = plan.PaymentAmount,
+                nominal = plan.NominalCode,
+                payAccount = plan.BankAccountId,
+                payMethod = plan.OtherMethodId,
+                note = paymentNote,
+                paymentDate,
+            });
+        }
+
         var payment = ReceiptOutstanding.CreatePayment(
             receiptNumber,
             paymentDate,
             plan.PaymentAmount,
             plan.OtherMethodId,
             plan.BankAccountId,
-            note ?? "Rounding write-off",
+            paymentNote,
             allowNonPositive: true);
 
         var paymentId = await session.Client.InsertReceiptPaymentAsync(payment, cancellationToken);
@@ -347,6 +459,7 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
             receiptNumber,
             receiptPaymentId = paymentId,
             amount = plan.PaymentAmount,
+            bookValueGbp = ReceiptOutstanding.BookValueGbp(receipt),
             outstandingBefore = plan.Outstanding,
             nominal = plan.NominalCode,
             payAccount = plan.BankAccountId,
