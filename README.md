@@ -11,7 +11,7 @@ Authentication is the **SOAP API username and password**. It is not the REST “
    - **KashFlow SOAP API username** (`KASHFLOW_USERNAME`) — SOAP API UserName.
    - **KashFlow SOAP API password** (`KASHFLOW_PASSWORD`) — SOAP API Password. Cursor treats this as a secret. The server never writes it to logs.
    - **Read only** (`KASHFLOW_READ_ONLY`) — defaults to **true**.
-3. Cursor starts `scripts/kashflow-mcp`. That launcher picks the matching self-contained binary from this repository’s GitHub Releases (`v1.0.0`), checks `SHA256SUMS`, caches it under `~/.cache/kashflow-mcp` (or `%LOCALAPPDATA%\kashflow-mcp` on Windows), and execs it. An end user does not need the .NET SDK. The first launch needs network access to `github.com`.
+3. Cursor starts `scripts/kashflow-mcp`. That launcher picks the matching self-contained binary from this repository’s GitHub Releases (`v1.1.0`), checks `SHA256SUMS`, caches it under `~/.cache/kashflow-mcp` (or `%LOCALAPPDATA%\kashflow-mcp` on Windows), and execs it. An end user does not need the .NET SDK. The first launch needs network access to `github.com`.
 
 `tools/list` succeeds before those values are saved. The first tool call that talks to KashFlow reports a clear error until the SOAP username and password are set.
 
@@ -146,7 +146,7 @@ dotnet test KashflowConnector.slnx -c Release --no-build
 
 ## Publish release binaries
 
-Tag `v1.0.0` (the version in `.cursor-plugin/plugin.json`) and push it. `.github/workflows/release.yml` builds, tests, and uploads:
+Tag `v1.1.0` (the version in `.cursor-plugin/plugin.json`) and push it. `.github/workflows/release.yml` builds, tests, and uploads:
 
 - `KashflowMCP-<rid>.zip` for `linux-x64`, `linux-arm64`, `win-x64`, `win-arm64`, `osx-x64`, `osx-arm64`
 - `SHA256SUMS`

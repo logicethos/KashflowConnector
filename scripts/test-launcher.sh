@@ -67,7 +67,7 @@ stop_server() {
 PORT="$(start_server)"
 export KASHFLOW_MCP_RELEASE_BASE="http://127.0.0.1:${PORT}"
 export KASHFLOW_MCP_CACHE="$WORKDIR/cache"
-export KASHFLOW_MCP_VERSION="1.0.0"
+export KASHFLOW_MCP_VERSION="1.1.0"
 export KASHFLOW_MCP_RID="linux-x64"
 unset KASHFLOW_MCP_BIN || true
 
