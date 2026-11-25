@@ -293,12 +293,16 @@ public class McpToolsListTests
         Assert.Contains("get_bank_accounts", names);
         Assert.Contains("get_receipt_payments", names);
         Assert.Contains("get_receipt_payment_methods", names);
+        Assert.Contains("search_bank_transactions", names);
         Assert.Contains("get_quotes", names);
         Assert.Contains("get_balance_sheet", names);
         Assert.Contains("get_projects", names);
         Assert.DoesNotContain("insert_customer", names);
         Assert.DoesNotContain("insert_invoice", names);
         Assert.DoesNotContain("insert_receipt_payment", names);
+        Assert.DoesNotContain("allocate_bank_payment_to_receipts", names);
+        Assert.DoesNotContain("insert_fx_receipt_payment", names);
+        Assert.DoesNotContain("write_off_receipt_rounding", names);
         Assert.DoesNotContain("insert_invoice_payment", names);
         Assert.DoesNotContain("delete_receipt_payment", names);
         Assert.DoesNotContain("insert_bank_transaction", names);
@@ -361,7 +365,13 @@ public class McpToolsListTests
             Assert.True(property.TryGetProperty("description", out var fieldDescription) && fieldDescription.GetString()!.Length > 0, field);
         }
 
-        foreach (var writeName in new[] { "insert_invoice_payment", "delete_invoice_payment", "delete_receipt_payment", "insert_bank_transaction", "update_customer", "delete_customer", "update_invoice", "delete_invoice", "update_receipt2", "insert_quote", "transfer_between_bank_accounts" })
+        foreach (var writeName in new[]
+                 {
+                     "insert_invoice_payment", "delete_invoice_payment", "delete_receipt_payment", "insert_bank_transaction",
+                     "update_customer", "delete_customer", "update_invoice", "delete_invoice", "update_receipt2", "insert_quote",
+                     "transfer_between_bank_accounts", "allocate_bank_payment_to_receipts", "insert_fx_receipt_payment",
+                     "write_off_receipt_rounding",
+                 })
             Assert.Contains(writeName, tools.Keys);
         Assert.Equal(1, tools.Keys.Count(name => name == "insert_bank_transaction"));
         Assert.True(tools["insert_invoice_payment"].JsonSchema.GetProperty("properties").TryGetProperty("invoicePayment", out _));
@@ -378,6 +388,34 @@ public class McpToolsListTests
             Assert.True(transferProperty.TryGetProperty("description", out var transferDescription) && transferDescription.GetString()!.Length > 0, field);
         }
         Assert.False(transfer.TryGetProperty("transactionTypeId", out _), "transactionTypeId was removed; destination uses toNominalId");
+
+        var allocate = tools["allocate_bank_payment_to_receipts"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[]
+                 {
+                     "paymentDate", "totalAmount", "allocations", "bankAccountId", "bankAccountCode",
+                     "paymentMethodId", "paymentMethodName", "note",
+                 })
+            Assert.True(allocate.TryGetProperty(field, out _), field);
+
+        var fx = tools["insert_fx_receipt_payment"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[]
+                 {
+                     "receiptNumber", "paymentDate", "bankAmountGbp", "bankAccountId", "bankAccountCode",
+                     "paymentMethodId", "paymentMethodName", "note",
+                 })
+            Assert.True(fx.TryGetProperty(field, out _), field);
+
+        var writeOff = tools["write_off_receipt_rounding"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[] { "receiptNumber", "paymentDate", "nominal", "maxAmount", "note" })
+            Assert.True(writeOff.TryGetProperty(field, out _), field);
+
+        Assert.Contains("search_bank_transactions", tools.Keys);
+        var search = tools["search_bank_transactions"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[]
+                 {
+                     "amount", "tolerance", "direction", "dateFrom", "dateTo", "bankAccountIds", "bankAccountCodes",
+                 })
+            Assert.True(search.TryGetProperty(field, out _), field);
 
         var customer = ResolveSchema(tools["insert_customer"].JsonSchema, Property(tools["insert_customer"].JsonSchema, "properties", "customer"));
         var name = ResolveSchema(tools["insert_customer"].JsonSchema, Property(customer, "properties", "name"));

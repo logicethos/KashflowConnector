@@ -275,6 +275,15 @@ public sealed class InsertReceiptInput
     public List<InsertDocumentLineInput>? Lines { get; set; }
 }
 
+public sealed class ReceiptPaymentAllocationInput
+{
+    [Description("Purchase receipt number.")]
+    public int ReceiptNumber { get; set; }
+
+    [Description("Amount to allocate to this receipt, greater than 0.")]
+    public decimal Amount { get; set; }
+}
+
 public sealed class InsertJournalLineInput
 {
     [Description("Nominal code ID to post. Required.")]
