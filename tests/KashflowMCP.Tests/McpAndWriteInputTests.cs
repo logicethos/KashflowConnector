@@ -305,6 +305,7 @@ public class McpToolsListTests
         Assert.DoesNotContain("delete_customer", names);
         Assert.DoesNotContain("create_account", names);
         Assert.DoesNotContain("sage_file", names);
+        Assert.DoesNotContain("transfer_between_bank_accounts", names);
 
         var joined = string.Join("\n", stderr);
         Assert.Contains("Password is never logged.", joined, StringComparison.Ordinal);
@@ -360,11 +361,23 @@ public class McpToolsListTests
             Assert.True(property.TryGetProperty("description", out var fieldDescription) && fieldDescription.GetString()!.Length > 0, field);
         }
 
-        foreach (var writeName in new[] { "insert_invoice_payment", "delete_invoice_payment", "delete_receipt_payment", "insert_bank_transaction", "update_customer", "delete_customer", "update_invoice", "delete_invoice", "update_receipt2", "insert_quote" })
+        foreach (var writeName in new[] { "insert_invoice_payment", "delete_invoice_payment", "delete_receipt_payment", "insert_bank_transaction", "update_customer", "delete_customer", "update_invoice", "delete_invoice", "update_receipt2", "insert_quote", "transfer_between_bank_accounts" })
             Assert.Contains(writeName, tools.Keys);
+        Assert.Equal(1, tools.Keys.Count(name => name == "insert_bank_transaction"));
         Assert.True(tools["insert_invoice_payment"].JsonSchema.GetProperty("properties").TryGetProperty("invoicePayment", out _));
         Assert.True(tools["delete_receipt_payment"].JsonSchema.GetProperty("properties").TryGetProperty("receiptPaymentNumber", out _));
         Assert.True(tools["insert_bank_transaction"].JsonSchema.GetProperty("properties").TryGetProperty("bp", out _));
+        var transfer = tools["transfer_between_bank_accounts"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[]
+        {
+            "amount", "transferDate", "fromBankAccountId", "fromBankAccountCode",
+            "toBankAccountId", "toBankAccountCode", "toNominalId", "comment",
+        })
+        {
+            Assert.True(transfer.TryGetProperty(field, out var transferProperty), field);
+            Assert.True(transferProperty.TryGetProperty("description", out var transferDescription) && transferDescription.GetString()!.Length > 0, field);
+        }
+        Assert.False(transfer.TryGetProperty("transactionTypeId", out _), "transactionTypeId was removed; destination uses toNominalId");
 
         var customer = ResolveSchema(tools["insert_customer"].JsonSchema, Property(tools["insert_customer"].JsonSchema, "properties", "customer"));
         var name = ResolveSchema(tools["insert_customer"].JsonSchema, Property(customer, "properties", "name"));
