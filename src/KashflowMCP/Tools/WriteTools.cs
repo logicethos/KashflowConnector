@@ -108,52 +108,59 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
         });
     }
 
-    [McpServerTool(Name = "transfer_between_bank_accounts"), Description("Move money from one KashFlow bank account to another. KashFlow has no transfer operation, so this posts money out of the source account and money in to the destination account by calling InsertBankTransaction twice. It does not replace insert_bank_transaction. Requires KashFlow__ReadOnly=false. If the destination post fails, the source transaction is removed. Nominal codes such as 1206 use the same account-code lookup as insert_receipt_payment. When both an id and a code are set, the id is used. transactionTypeId defaults to the bank transaction type named Transfer or Bank Transfer.")]
+    [McpServerTool(Name = "transfer_between_bank_accounts"), Description("Move money from one KashFlow bank account to another. KashFlow records a transfer as one InsertBankTransaction on the source account (moneyout = amount, moneyin = 0) with transactionType set to the destination bank's nominal id from get_nominal_codes (id), not a get_bank_tx_types value. KashFlow then shows that same line on the destination feed. Do not also insert a moneyin on the destination — that doubles the transfer. Requires KashFlow__ReadOnly=false. Does not replace insert_bank_transaction. Resolve the destination with toBankAccountId / toBankAccountCode (looked up via get_nominal_codes), or pass toNominalId to override. Source account codes such as 1206 use the same lookup as insert_receipt_payment.")]
     public async Task<string> TransferBetweenBankAccounts(
         [Description("Amount to move, greater than 0.")] decimal amount,
-        [Description("Transfer date (ISO-8601), used on both bank transactions.")] DateTime transferDate,
+        [Description("Transfer date (ISO-8601) stored on the source bank transaction.")] DateTime transferDate,
         [Description("Source bank account id from get_bank_accounts (accountId). Optional when fromBankAccountCode is set.")] int? fromBankAccountId = null,
         [Description("Source nominal code from get_bank_accounts (accountCode), for example 1206. Used only when fromBankAccountId is omitted.")] int? fromBankAccountCode = null,
-        [Description("Destination bank account id from get_bank_accounts (accountId). Optional when toBankAccountCode is set.")] int? toBankAccountId = null,
-        [Description("Destination nominal code from get_bank_accounts (accountCode), for example 1209. Used only when toBankAccountId is omitted.")] int? toBankAccountCode = null,
-        [Description("Bank transaction type id from get_bank_tx_types. Optional. When omitted, the type named Transfer or Bank Transfer is used.")] int? transactionTypeId = null,
-        [Description("Comment stored on both transactions. When omitted, a short transfer note is used.")] string? comment = null,
+        [Description("Destination bank account id from get_bank_accounts (accountId). Optional when toBankAccountCode or toNominalId is set.")] int? toBankAccountId = null,
+        [Description("Destination nominal code from get_bank_accounts (accountCode), for example 1209. Used to find the destination nominal id. Optional when toBankAccountId or toNominalId is set.")] int? toBankAccountCode = null,
+        [Description("Destination bank account's nominal id (get_nominal_codes id). Stored as BankTransaction.TransactionType. Optional override when toBankAccountId or toBankAccountCode is set.")] int? toNominalId = null,
+        [Description("Comment stored on the source bank transaction. When omitted, a short transfer note is used.")] string? comment = null,
         CancellationToken cancellationToken = default)
     {
         ToolGuard.EnsureWritable(runtime);
 
-        IReadOnlyList<BankAccount>? accounts = null;
-        async Task<IReadOnlyList<BankAccount>> Accounts()
-            => accounts ??= await session.Client.GetBankAccountsAsync(cancellationToken);
+        var accounts = await session.Client.GetBankAccountsAsync(cancellationToken);
+        var nominals = await session.Client.GetNominalCodesAsync(cancellationToken);
 
-        var fromId = fromBankAccountId is int givenFrom && givenFrom > 0
-            ? givenFrom
-            : BankTransfer.ResolveAccountId(fromBankAccountId, fromBankAccountCode, await Accounts(), "from");
-        var toId = toBankAccountId is int givenTo && givenTo > 0
-            ? givenTo
-            : BankTransfer.ResolveAccountId(toBankAccountId, toBankAccountCode, await Accounts(), "to");
+        var fromId = fromBankAccountId is int sourceId && sourceId > 0
+            ? sourceId
+            : BankTransfer.ResolveAccountId(fromBankAccountId, fromBankAccountCode, accounts, "from");
 
-        var typeId = transactionTypeId is int givenType && givenType > 0
-            ? givenType
-            : BankTransfer.ResolveTransferTypeId(transactionTypeId, await session.Client.GetBankTxTypesAsync(cancellationToken));
+        int? resolvedToAccountId = null;
+        if (toBankAccountId is int destinationId && destinationId > 0)
+            resolvedToAccountId = destinationId;
+        else if (toBankAccountCode is int destinationCode && destinationCode > 0)
+            resolvedToAccountId = BankTransfer.ResolveAccountId(null, destinationCode, accounts, "to");
+        else if (toNominalId is int onlyNominal && onlyNominal > 0)
+            resolvedToAccountId = BankTransfer.FindBankAccountIdForNominal(onlyNominal, accounts, nominals);
+
+        BankTransfer.EnsureDifferentAccounts(fromId, resolvedToAccountId);
+
+        var destinationNominalId = BankTransfer.ResolveDestinationNominalId(
+            toNominalId,
+            toBankAccountId,
+            toBankAccountCode,
+            accounts,
+            nominals);
 
         var result = await BankTransfer.PostAsync(
             fromId,
-            toId,
+            destinationNominalId,
             amount,
             transferDate,
-            typeId,
             comment,
             (transaction, token) => session.Client.InsertBankTransactionAsync(transaction, token),
-            async (transactionId, token) => { await session.Client.DeleteBankTransactionAsync(transactionId, token); },
             cancellationToken);
 
         return JsonResults.Serialize(new
         {
-            fromTransactionId = result.FromTransactionId,
-            toTransactionId = result.ToTransactionId,
-            fromBankAccountId = fromId,
-            toBankAccountId = toId,
+            transactionId = result.TransactionId,
+            fromBankAccountId = result.FromBankAccountId,
+            toBankAccountId = resolvedToAccountId,
+            toNominalId = result.ToNominalId,
             amount,
         });
     }

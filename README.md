@@ -65,7 +65,7 @@ Not exposed, because they are not accounting-record operations or they duplicate
 - `SageFile`, `SageFileImport`, `GetDigitaCSVFile`, and `VCFToCustomerObjects` are file or binary payloads.
 - `*TypeDefined` operations are the legacy duplicate of the operation without that suffix (`GetInvoice` rather than `GetInvoice_TypeDefined`, and the same for invoices, receipts, and account defaults).
 
-Sales invoice payments are `insert_invoice_payment` (`Payment`: `payInvoice` is the invoice number, `payMethod` the method id, `payAccount` the bank account id, `payAmount` the amount), `get_invoice_payments`, and `delete_invoice_payment` (`invoiceNumber`, `invoicePaymentNumber`). Purchase payment removal is `delete_receipt_payment` (`receiptPaymentNumber`). A single bank transaction is `insert_bank_transaction` (plus `update_bank_transaction` and `delete_bank_transaction`). That generated tool is the only single-sided insert. Moving money between two bank accounts is the custom function `transfer_between_bank_accounts`.
+Sales invoice payments are `insert_invoice_payment` (`Payment`: `payInvoice` is the invoice number, `payMethod` the method id, `payAccount` the bank account id, `payAmount` the amount), `get_invoice_payments`, and `delete_invoice_payment` (`invoiceNumber`, `invoicePaymentNumber`). Purchase payment removal is `delete_receipt_payment` (`receiptPaymentNumber`). A single bank transaction is `insert_bank_transaction` (plus `update_bank_transaction` and `delete_bank_transaction`). Moving money between two bank accounts is the custom function `transfer_between_bank_accounts` (one source moneyout whose `transactionType` is the destination nominal id).
 
 ## Custom functions
 
@@ -73,23 +73,25 @@ Tools in this section are composed by this server. They are not one-to-one SOAP 
 
 ### `transfer_between_bank_accounts`
 
-KashFlow's SOAP API has no transfer operation. This write is available only when `KashFlow__ReadOnly` is false. It does not replace `insert_bank_transaction`. It calls that same SOAP operation twice:
+KashFlow records a bank-to-bank transfer as **one** `InsertBankTransaction` on the source account:
 
-- source account: `moneyout` = amount
-- destination account: `moneyin` = amount
+- `moneyout` = amount, `moneyin` = 0
+- `transactionType` = the destination bank account's **nominal id** (`get_nominal_codes` → `id`), not a `get_bank_tx_types` value
 
-Both use the same date, comment, and transaction type. If the destination post fails, the source transaction is deleted. Nominal codes such as 1206 and 1209 go through the same account-code lookup as `insert_receipt_payment`.
+KashFlow then shows that same line on the destination bank's feed. Posting a separate money-in on the destination doubles the transfer. This write is available only when `KashFlow__ReadOnly` is false. It does not replace `insert_bank_transaction`.
+
+The destination nominal id is resolved from `toBankAccountId` / `toBankAccountCode` via `get_nominal_codes` (match `BankAccount.AccountCode` to `NominalCode.Code`). Pass `toNominalId` to set or override that id. Source codes such as 1206 use the same account-code lookup as `insert_receipt_payment`.
 
 | Parameter | Required | Meaning |
 | --- | --- | --- |
 | `amount` | yes | Amount to move, greater than 0. |
-| `transferDate` | yes | Date on both transactions. |
-| `fromBankAccountId` | one of id or code | `accountId` from `get_bank_accounts`. |
-| `fromBankAccountCode` | one of id or code | Nominal code such as 1206. Used when the id is omitted. |
-| `toBankAccountId` | one of id or code | Destination `accountId`. |
-| `toBankAccountCode` | one of id or code | Destination nominal code such as 1209. |
-| `transactionTypeId` | no | Type id from `get_bank_tx_types`. Defaults to the type named Transfer or Bank Transfer. |
-| `comment` | no | Stored on both transactions. |
+| `transferDate` | yes | Date on the source bank transaction. |
+| `fromBankAccountId` | one of id or code | Source `accountId` from `get_bank_accounts`. |
+| `fromBankAccountCode` | one of id or code | Source nominal code such as 1206. Used when the id is omitted. |
+| `toBankAccountId` | one of id, code, or `toNominalId` | Destination `accountId`. |
+| `toBankAccountCode` | one of id, code, or `toNominalId` | Destination nominal code such as 1209. |
+| `toNominalId` | one of id, code, or `toNominalId` | Destination `get_nominal_codes` id. Stored as `transactionType`. |
+| `comment` | no | Stored on the source bank transaction. |
 
 ## Configuration
 

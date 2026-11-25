@@ -371,12 +371,13 @@ public class McpToolsListTests
         foreach (var field in new[]
         {
             "amount", "transferDate", "fromBankAccountId", "fromBankAccountCode",
-            "toBankAccountId", "toBankAccountCode", "transactionTypeId", "comment",
+            "toBankAccountId", "toBankAccountCode", "toNominalId", "comment",
         })
         {
             Assert.True(transfer.TryGetProperty(field, out var transferProperty), field);
             Assert.True(transferProperty.TryGetProperty("description", out var transferDescription) && transferDescription.GetString()!.Length > 0, field);
         }
+        Assert.False(transfer.TryGetProperty("transactionTypeId", out _), "transactionTypeId was removed; destination uses toNominalId");
 
         var customer = ResolveSchema(tools["insert_customer"].JsonSchema, Property(tools["insert_customer"].JsonSchema, "properties", "customer"));
         var name = ResolveSchema(tools["insert_customer"].JsonSchema, Property(customer, "properties", "name"));

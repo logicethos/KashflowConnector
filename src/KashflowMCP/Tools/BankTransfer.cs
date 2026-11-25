@@ -3,53 +3,43 @@ using KashFlow;
 namespace KashflowMCP.Tools;
 
 /// <summary>
-/// A bank-to-bank transfer built from two KashFlow bank transactions.
-/// The SOAP API has no transfer operation. One transaction can name only one account.
+/// A bank-to-bank transfer as KashFlow records it: one <see cref="BankTransaction"/> on the
+/// source account with <see cref="BankTransaction.Moneyout"/> set and
+/// <see cref="BankTransaction.TransactionType"/> equal to the destination bank account's
+/// nominal id (<see cref="NominalCode.Id"/>). KashFlow mirrors that line onto the destination
+/// feed. A second money-in insert would double the transfer.
 /// </summary>
 public static class BankTransfer
 {
-    public sealed record Result(int FromTransactionId, int ToTransactionId);
+    public sealed record Result(int TransactionId, int FromBankAccountId, int ToNominalId);
 
-    public static (BankTransaction Outgoing, BankTransaction Incoming) CreatePair(
+    public static BankTransaction Create(
         int fromBankAccountId,
-        int toBankAccountId,
+        int toNominalId,
         decimal amount,
         DateTime transferDate,
-        int transactionTypeId,
         string? comment)
     {
-        if (fromBankAccountId <= 0 || toBankAccountId <= 0)
-            throw new ArgumentException("Both bank accounts must be account ids from get_bank_accounts.");
-        if (fromBankAccountId == toBankAccountId)
-            throw new ArgumentException("The source and destination bank accounts are the same.");
+        if (fromBankAccountId <= 0)
+            throw new ArgumentException("fromBankAccountId must be an accountId from get_bank_accounts.");
+        if (toNominalId <= 0)
+            throw new ArgumentException("toNominalId must be a nominal id (get_nominal_codes id) for the destination bank.");
         if (amount <= 0)
             throw new ArgumentException("amount must be greater than 0.");
-        if (transactionTypeId <= 0)
-            throw new ArgumentException("transactionTypeId must be a typeId from get_bank_tx_types.");
 
         var note = string.IsNullOrWhiteSpace(comment)
-            ? $"Transfer from account {fromBankAccountId} to account {toBankAccountId}"
+            ? $"Transfer to nominal {toNominalId}"
             : comment.Trim();
 
-        var outgoing = new BankTransaction
+        return new BankTransaction
         {
             Accid = fromBankAccountId,
             TransactionDate = transferDate,
             Moneyout = amount,
             Moneyin = 0,
-            TransactionType = transactionTypeId,
+            TransactionType = toNominalId,
             Comment = note,
         };
-        var incoming = new BankTransaction
-        {
-            Accid = toBankAccountId,
-            TransactionDate = transferDate,
-            Moneyin = amount,
-            Moneyout = 0,
-            TransactionType = transactionTypeId,
-            Comment = note,
-        };
-        return (outgoing, incoming);
     }
 
     public static int ResolveAccountId(
@@ -72,70 +62,125 @@ public static class BankTransfer
         }
     }
 
-    public static int ResolveTransferTypeId(int? transactionTypeId, IReadOnlyList<BankTXType>? types)
+    /// <summary>
+    /// Destination side of a transfer: either an explicit nominal id, or the
+    /// <see cref="NominalCode.Id"/> whose <see cref="NominalCode.Code"/> matches the
+    /// destination bank account's <see cref="BankAccount.AccountCode"/>.
+    /// </summary>
+    public static int ResolveDestinationNominalId(
+        int? toNominalId,
+        int? toBankAccountId,
+        int? toBankAccountCode,
+        IReadOnlyList<BankAccount>? accounts,
+        IReadOnlyList<NominalCode>? nominals)
     {
-        if (transactionTypeId is int id && id > 0)
-            return id;
+        if (toNominalId is int explicitId && explicitId > 0)
+        {
+            var nominal = (nominals ?? []).FirstOrDefault(item => item.Id == explicitId);
+            if (nominal is null && nominals is not null)
+                throw new ArgumentException(
+                    $"toNominalId {explicitId} is not in get_nominal_codes.");
 
-        var available = types ?? [];
-        var exact = available.FirstOrDefault(type =>
-            string.Equals(type.TypeName, "bank transfer", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(type.TypeName, "transfer", StringComparison.OrdinalIgnoreCase));
-        if (exact is not null)
-            return exact.TypeID;
+            if (toBankAccountId is int accountId && accountId > 0
+                || toBankAccountCode is int accountCode && accountCode > 0)
+            {
+                var expectedCode = ResolveDestinationAccountCode(toBankAccountId, toBankAccountCode, accounts);
+                if (nominal is not null && nominal.Code != expectedCode)
+                    throw new ArgumentException(
+                        $"toNominalId {explicitId} is nominal code {nominal.Code}, but the destination bank account uses code {expectedCode}.");
+            }
 
-        var named = available
-            .Where(type => type.TypeName?.Contains("transfer", StringComparison.OrdinalIgnoreCase) == true)
+            return explicitId;
+        }
+
+        var code = ResolveDestinationAccountCode(toBankAccountId, toBankAccountCode, accounts);
+        var matches = (nominals ?? [])
+            .Where(item => item.Code == code)
             .ToList();
-        if (named.Count == 1)
-            return named[0].TypeID;
-        if (named.Count == 0)
+        if (matches.Count == 1)
+            return matches[0].Id;
+        if (matches.Count == 0)
             throw new ArgumentException(
-                "No bank transaction type looks like a transfer. Call get_bank_tx_types and pass transactionTypeId.");
+                $"No nominal code has Code {code}. Call get_nominal_codes, or pass toNominalId.");
 
-        var list = string.Join(", ", named.Select(type => $"{type.TypeID}:{type.TypeName}"));
+        var list = string.Join(", ", matches.Select(item => $"{item.Id}:{item.Name}"));
         throw new ArgumentException(
-            $"More than one transaction type looks like a transfer ({list}). Pass transactionTypeId.");
+            $"More than one nominal has Code {code} ({list}). Pass toNominalId.");
+    }
+
+    public static int ResolveDestinationAccountCode(
+        int? toBankAccountId,
+        int? toBankAccountCode,
+        IReadOnlyList<BankAccount>? accounts)
+    {
+        if (toBankAccountCode is int code && code > 0)
+        {
+            if (toBankAccountId is int accountId && accountId > 0)
+            {
+                var account = (accounts ?? []).FirstOrDefault(item => item.AccountID == accountId)
+                    ?? throw new ArgumentException(
+                        $"No bank account has accountId {accountId}. Call get_bank_accounts.");
+                if (account.AccountCode != code)
+                    throw new ArgumentException(
+                        $"toBankAccountId {accountId} has accountCode {account.AccountCode}, not {code}.");
+            }
+
+            return code;
+        }
+
+        if (toBankAccountId is not int id || id <= 0)
+            throw new ArgumentException(
+                "Pass toNominalId, or toBankAccountId / toBankAccountCode so the destination nominal can be resolved.");
+
+        var match = (accounts ?? []).FirstOrDefault(item => item.AccountID == id)
+            ?? throw new ArgumentException(
+                $"No bank account has accountId {id}. Call get_bank_accounts.");
+        if (match.AccountCode <= 0)
+            throw new ArgumentException(
+                $"Bank account {id} has no accountCode to map to a nominal id. Pass toNominalId.");
+        return match.AccountCode;
+    }
+
+    public static void EnsureDifferentAccounts(int fromBankAccountId, int? toBankAccountId)
+    {
+        if (toBankAccountId is int toId && toId > 0 && fromBankAccountId == toId)
+            throw new ArgumentException("The source and destination bank accounts are the same.");
+    }
+
+    /// <summary>
+    /// Finds the bank account whose <see cref="BankAccount.AccountCode"/> matches the
+    /// <see cref="NominalCode.Code"/> for <paramref name="nominalId"/>, when that mapping is unique.
+    /// </summary>
+    public static int? FindBankAccountIdForNominal(
+        int nominalId,
+        IReadOnlyList<BankAccount>? accounts,
+        IReadOnlyList<NominalCode>? nominals)
+    {
+        if (nominalId <= 0)
+            return null;
+
+        var nominal = (nominals ?? []).FirstOrDefault(item => item.Id == nominalId);
+        if (nominal is null)
+            return null;
+
+        var matches = (accounts ?? [])
+            .Where(account => account.AccountCode == nominal.Code)
+            .ToList();
+        return matches.Count == 1 ? matches[0].AccountID : null;
     }
 
     public static async Task<Result> PostAsync(
         int fromBankAccountId,
-        int toBankAccountId,
+        int toNominalId,
         decimal amount,
         DateTime transferDate,
-        int transactionTypeId,
         string? comment,
         Func<BankTransaction, CancellationToken, Task<int>> insert,
-        Func<int, CancellationToken, Task> delete,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(insert);
-        ArgumentNullException.ThrowIfNull(delete);
-        var (outgoing, incoming) = CreatePair(
-            fromBankAccountId, toBankAccountId, amount, transferDate, transactionTypeId, comment);
-
-        var fromTransactionId = await insert(outgoing, cancellationToken);
-        try
-        {
-            var toTransactionId = await insert(incoming, cancellationToken);
-            return new Result(fromTransactionId, toTransactionId);
-        }
-        catch (Exception incomingFailure)
-        {
-            try
-            {
-                await delete(fromTransactionId, cancellationToken);
-            }
-            catch (Exception deleteFailure)
-            {
-                throw new InvalidOperationException(
-                    $"The destination side of the transfer failed, and outgoing bank transaction {fromTransactionId} is still on account {fromBankAccountId}. Remove that transaction before retrying.",
-                    new AggregateException(incomingFailure, deleteFailure));
-            }
-
-            throw new InvalidOperationException(
-                $"The destination side of the transfer failed. Outgoing bank transaction {fromTransactionId} was removed.",
-                incomingFailure);
-        }
+        var transaction = Create(fromBankAccountId, toNominalId, amount, transferDate, comment);
+        var transactionId = await insert(transaction, cancellationToken);
+        return new Result(transactionId, fromBankAccountId, toNominalId);
     }
 }
