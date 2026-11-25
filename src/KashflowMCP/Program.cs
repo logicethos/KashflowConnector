@@ -42,10 +42,14 @@ var mcp = builder.Services
     .WithTools<ProductTools>()
     .WithTools<NominalTools>()
     .WithTools<JournalTools>()
-    .WithTools<BankTools>();
+    .WithTools<BankTools>()
+    .WithTools<AdditionalReadTools>();
 
 if (!session.ReadOnly)
+{
     mcp.WithTools<WriteTools>();
+    mcp.WithTools<AdditionalWriteTools>();
+}
 
 Console.Error.WriteLine(
     $"KashflowMCP starting (ReadOnly={session.ReadOnly}, credentialsConfigured={session.CredentialsConfigured}). Password is never logged.");

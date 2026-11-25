@@ -293,9 +293,18 @@ public class McpToolsListTests
         Assert.Contains("get_bank_accounts", names);
         Assert.Contains("get_receipt_payments", names);
         Assert.Contains("get_receipt_payment_methods", names);
+        Assert.Contains("get_quotes", names);
+        Assert.Contains("get_balance_sheet", names);
+        Assert.Contains("get_projects", names);
         Assert.DoesNotContain("insert_customer", names);
         Assert.DoesNotContain("insert_invoice", names);
         Assert.DoesNotContain("insert_receipt_payment", names);
+        Assert.DoesNotContain("insert_invoice_payment", names);
+        Assert.DoesNotContain("delete_receipt_payment", names);
+        Assert.DoesNotContain("insert_bank_transaction", names);
+        Assert.DoesNotContain("delete_customer", names);
+        Assert.DoesNotContain("create_account", names);
+        Assert.DoesNotContain("sage_file", names);
 
         var joined = string.Join("\n", stderr);
         Assert.Contains("Password is never logged.", joined, StringComparison.Ordinal);
@@ -350,6 +359,12 @@ public class McpToolsListTests
             Assert.True(receiptPayment.GetProperty("properties").TryGetProperty(field, out var property), field);
             Assert.True(property.TryGetProperty("description", out var fieldDescription) && fieldDescription.GetString()!.Length > 0, field);
         }
+
+        foreach (var writeName in new[] { "insert_invoice_payment", "delete_invoice_payment", "delete_receipt_payment", "insert_bank_transaction", "update_customer", "delete_customer", "update_invoice", "delete_invoice", "update_receipt2", "insert_quote" })
+            Assert.Contains(writeName, tools.Keys);
+        Assert.True(tools["insert_invoice_payment"].JsonSchema.GetProperty("properties").TryGetProperty("invoicePayment", out _));
+        Assert.True(tools["delete_receipt_payment"].JsonSchema.GetProperty("properties").TryGetProperty("receiptPaymentNumber", out _));
+        Assert.True(tools["insert_bank_transaction"].JsonSchema.GetProperty("properties").TryGetProperty("bp", out _));
 
         var customer = ResolveSchema(tools["insert_customer"].JsonSchema, Property(tools["insert_customer"].JsonSchema, "properties", "customer"));
         var name = ResolveSchema(tools["insert_customer"].JsonSchema, Property(customer, "properties", "name"));
