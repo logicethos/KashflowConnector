@@ -4,6 +4,7 @@ namespace KashflowMCP.Tools;
 
 /// <summary>
 /// Splits one bank payment across several purchase receipts (add-only InsertReceiptPayment calls).
+/// Outstanding checks use <see cref="ReceiptOutstanding.Balance"/> (GBP book value for FX receipts).
 /// </summary>
 public static class AllocateBankPayment
 {

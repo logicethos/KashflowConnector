@@ -22,7 +22,7 @@ Authentication is the **SOAP API username and password**. It is not the REST “
 `KashFlow__ReadOnly` defaults to **true**.
 
 - **true** (the marketplace default): only read tools are registered (`get_*`, `is_*`, `search_*`). The SOAP client also refuses every call that would change KashFlow.
-- **false**: write tools are registered as well: `insert_customer`, `insert_supplier`, `insert_invoice`, `insert_receipt2`, `insert_journal`, `insert_receipt_payment`, `allocate_bank_payment_to_receipts`, `insert_fx_receipt_payment`, `write_off_receipt_rounding`, and `transfer_between_bank_accounts`.
+- **false**: write tools are registered as well: `insert_customer`, `insert_supplier`, `insert_invoice`, `insert_receipt2`, `insert_journal`, `insert_receipt_payment`, `allocate_bank_payment_to_receipts`, `insert_fx_receipt_payment`, `cleanup_fx_receipt_bank_lines`, `write_off_receipt_rounding`, and `transfer_between_bank_accounts`.
 
 Each write tool takes a structured object with documented fields (name, addresses, lines, nominals, and so on). You can still pass the previous full SOAP JSON string (`customerJson`, `supplierJson`, `invoiceJson`, `receiptJson`, `journalJson`). When that string is set, it is used and the structured fields are ignored, so extra text and checkbox fields on Customer still work.
 
@@ -39,6 +39,7 @@ These tools record money paid against a purchase receipt (a supplier bill), not 
 | `insert_receipt_payment` | write (`KashFlow__ReadOnly=false`) | SOAP `InsertReceiptPayment`. |
 | `allocate_bank_payment_to_receipts` | write | Split one bank amount across several receipts (see [Custom functions](#custom-functions)). |
 | `insert_fx_receipt_payment` | write | FX receipt paid from GBP (see Custom functions). |
+| `cleanup_fx_receipt_bank_lines` | write | Remove stray Currency Fluctuation bank-feed lines from an already-posted FX payment (see Custom functions). |
 | `write_off_receipt_rounding` | write | Small balancing payment (see Custom functions). |
 
 `insert_receipt_payment` parameters:
@@ -99,7 +100,7 @@ The destination nominal id is resolved from `toBankAccountId` / `toBankAccountCo
 
 ### `allocate_bank_payment_to_receipts`
 
-Add-only. Validates before writing: allocations must sum exactly to `totalAmount` (to the penny), receipt numbers must be unique, each receipt must exist, and no allocation may exceed that receipt's outstanding balance (`net + VAT - amountPaid`). Then calls `InsertReceiptPayment` once per allocation. If a later insert fails, earlier successes are left in place and listed so they can be undone with `delete_receipt_payment`.
+Add-only. Validates before writing: allocations must sum exactly to `totalAmount` (to the penny), receipt numbers must be unique, each receipt must exist, and no allocation may exceed that receipt's **GBP outstanding** (book GBP value minus `AmountPaid`; for foreign-currency receipts the book value is `(net + VAT) / ExchangeRate` rounded to 2dp). Then calls `InsertReceiptPayment` once per allocation. If a later insert fails, earlier successes are left in place and listed so they can be undone with `delete_receipt_payment`.
 
 | Parameter | Required | Meaning |
 | --- | --- | --- |
@@ -109,10 +110,13 @@ Add-only. Validates before writing: allocations must sum exactly to `totalAmount
 | `bankAccountId` / `bankAccountCode` | one | Paying bank account. |
 | `paymentMethodId` / `paymentMethodName` | one | Payment method. |
 | `note` | no | Stored on every payment. |
+| `dryRun` | no | When `true`, validate and return the planned payments without writing. Default `false`. |
 
 ### `search_bank_transactions`
 
-Read tool. Calls `GetBankTransactions` for each selected bank account (or all accounts) and filters client-side. Returns at most 200 matches with account code/name, transaction id, date, money in/out, comment, and type.
+Read tool. Calls `GetBankTransactions` for each selected bank account (or all accounts) and filters client-side. Returns at most 200 matches with account code/name, transaction id, date, money in/out, comment, type, and `hasBothMoneyInAndOut`.
+
+Amount matching also compares absolute values (so `1.80` matches `moneyout = -1.80`). When one API row has **both** money-in and money-out set, the same `transactionId` can match two different amount searches (seen on KF04195: £148.11 and £1.80 sharing id `154508988`). That is the KashFlow payload shape, not a search id-assignment bug; the response also lists `duplicateTransactionIds` when the same id appears more than once across the returned matches.
 
 | Parameter | Required | Meaning |
 | --- | --- | --- |
@@ -124,19 +128,46 @@ Read tool. Calls `GetBankTransactions` for each selected bank account (or all ac
 
 ### `insert_fx_receipt_payment`
 
-Add-only booking for a foreign-currency purchase receipt paid from a GBP bank account (the Logic Ethos pattern used on pairs such as KF04151/4165):
+Add-only booking for a foreign-currency purchase receipt paid from a GBP bank account (the Logic Ethos pattern used on pairs such as KF04151/4165).
 
-1. `InsertReceiptPayment` for `bankAmountGbp` from the bank account.
-2. An **Other** payment on the same receipt with note `Currency Fluctuation` for `outstanding - bankAmountGbp` (may be negative).
-3. A companion GBP purchase receipt for the same supplier on nominal **956** (Forex Gain/Loss), description `Loss/Gain on KF##### due to exchange rate fluctuations`, net = `-(step 2 amount)`, paid in full as Other with that same companion amount.
+Receipt payment lines are in **GBP** against the receipt's GBP book value. For an FX `Receipt2`, book value = `(NetAmount + VATAmount) / ExchangeRate` rounded to 2dp (e.g. €21.49 at 1.1941 → £18.00). Outstanding = book value − GBP `AmountPaid`. Do not subtract the bank GBP amount from the foreign net+VAT total.
+
+1. `InsertReceiptPayment` for `bankAmountGbp` from the bank account (`PayAccount` = bank `accountId`).
+2. An **Other** payment on the same receipt with note `Currency Fluctuation` for `outstandingGbp - bankAmountGbp` (may be negative; e.g. book £18.00, bank £18.41 → −£0.41), with **`PayAccount = 0`** (non-bank). Official [Payment](https://www.kashflow.com/developers/soap-api/payment/) docs only describe a bank account from `GetBankAccounts`; live UI-booked Other lines (KF04151/KF04165) do not appear on `GetBankTransactions`, but SOAP `InsertReceiptPayment` with a real `PayAccount` does (KF04195/KF04235). `PayAccount=0` is used so Other lines do not pollute the bank feed.
+3. A companion GBP purchase receipt for the same supplier on nominal **956** (Forex Gain/Loss), description **`Loss on KF##### due to exchange rate fluctuations`** or **`Gain on KF##### …`** (not `Loss/Gain`), net = `-(step 2 amount)`, paid in full as Other with `PayAccount=0`.
+4. `UpdateReceipt2` with **`Paid = 1`** on the source receipt (and companion when created). Payments alone can leave `AmountPaid` correct while `Paid` stays 0 (seen on KF04195/KF04189 vs UI precedents).
+5. **Bank-feed fallback:** after Other inserts, scan the bank account for `Currency Fluctuation` rows matching the payment date and absolute fluctuation amount. Delete only **new single-sided** rows. Never delete a row that has both `moneyIn` and `moneyOut` (shared id with the bank payment).
+
+`dryRun` returns the planned bank payment, Other lines (`payAccount: 0`), companion receipt, bank-feed cleanup plan, and `markPaid` steps without writing.
 
 If a later step fails, payments and the companion receipt created by this call are deleted when possible.
+
+| Parameter | Required | Meaning |
+| --- | --- | --- |
+| `receiptNumber` | yes | Purchase receipt number. |
+| `paymentDate` | yes | Payment and companion receipt date. |
+| `bankAmountGbp` | yes | GBP amount that left the bank. |
+| `bankAccountId` / `bankAccountCode` | one | Paying bank account. |
+| `paymentMethodId` / `paymentMethodName` | one | Method for the bank payment line. |
+| `note` | no | Note on the bank payment line. |
+| `dryRun` | no | When `true`, return every line that would be posted (bank, fluctuation, companion, bank-feed cleanup, Paid flag) without writing. Default `false`. |
+
+### `cleanup_fx_receipt_bank_lines`
+
+Separate cleanup for an **already-posted** FX payment whose Other lines left stray bank-feed rows. Matches `GetBankTransactions` by bank account, payment date, absolute fluctuation amount, and comment `Currency Fluctuation`. Defaults to `dryRun=true`. Never deletes a dual-amount row (both money-in and money-out on the same id).
+
+| Parameter | Required | Meaning |
+| --- | --- | --- |
+| `bankAccountId` / `bankAccountCode` | one | Bank account to scan. |
+| `paymentDate` | yes | Date of the FX booking. |
+| `fluctuationAmount` | yes | Posted fluctuation (may be negative); absolute value is matched. |
+| `dryRun` | no | Default `true`. Set `false` only after reviewing candidates. |
 
 ### `write_off_receipt_rounding`
 
 Add-only. Posts a balancing `InsertReceiptPayment` so a near-zero outstanding shows as paid.
 
-- Outstanding = `net + VAT - amountPaid`.
+- Outstanding = GBP book value − `AmountPaid` (same helper as FX/allocate: for FX receipts book value is `(net + VAT) / ExchangeRate`).
 - Refuses when outstanding is 0 or `abs(outstanding) > maxAmount` (default `0.05`).
 - **Nominal attribution:** `nominal` is required (no default). It must be a `get_bank_accounts` `accountCode` (a bank/cash account mapped to that nominal). The payment uses method **Other** and `payAccount` = that account's `accountId`. Create or pick such an account in KashFlow before calling this tool.
 
@@ -147,6 +178,7 @@ Add-only. Posts a balancing `InsertReceiptPayment` so a near-zero outstanding sh
 | `nominal` | yes | Bank `accountCode` / nominal code used as `payAccount`. |
 | `maxAmount` | no | Max absolute outstanding (default 0.05). |
 | `note` | no | Payment note (default `Rounding write-off`). |
+| `dryRun` | no | When `true`, return the balancing payment without writing. Default `false`. |
 
 ## Configuration
 

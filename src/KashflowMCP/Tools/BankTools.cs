@@ -68,10 +68,14 @@ public sealed class BankTools(KashFlowSession session)
                 ref remaining));
         }
 
+        var duplicateIds = BankTransactionSearch.DuplicateTransactionIds(matches);
         return JsonResults.Serialize(new
         {
             matchCount = matches.Count,
             truncated = remaining <= 0,
+            // Same BankTransaction.ID matching two amounts usually means one API row has both
+            // moneyIn and moneyOut set (not a search id-assignment bug).
+            duplicateTransactionIds = duplicateIds,
             matches = matches.Select(match => new
             {
                 bankAccountId = match.BankAccountId,
@@ -83,6 +87,7 @@ public sealed class BankTools(KashFlowSession session)
                 moneyOut = match.MoneyOut,
                 comment = match.Comment,
                 transactionType = match.TransactionType,
+                hasBothMoneyInAndOut = match.HasBothMoneyInAndOut,
             }),
         });
     }
