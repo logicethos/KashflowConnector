@@ -34,4 +34,8 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="KashflowMCP.Tests" />
+  </ItemGroup>
+
 </Project>

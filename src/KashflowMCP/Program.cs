@@ -2,9 +2,9 @@
 // the self-contained binary; this process does not require the .NET SDK.
 //
 // Credentials are optional at startup so hosts can call tools/list before setup.
-// KashFlow__UserName and KashFlow__Password are the SOAP API username and password,
-// not the REST memorable word. KashFlow__ReadOnly defaults to true.
-// The password is never logged.
+// KashFlow__UserName and KashFlow__Password are the SOAP API username and password.
+// KashFlow__MemorableWord (or KASHFLOW_MEMORABLE_WORD) enables REST tools (KfToken session).
+// KashFlow__ReadOnly defaults to true. Password and memorable word are never logged.
 
 using KashflowMCP;
 using KashflowMCP.Tools;
@@ -51,8 +51,12 @@ if (!session.ReadOnly)
     mcp.WithTools<AdditionalWriteTools>();
 }
 
+// REST tools need memorable-word session auth. Writes still honour ReadOnly unless dryRun.
+if (session.RestConfigured)
+    mcp.WithTools<RestTools>();
+
 Console.Error.WriteLine(
-    $"KashflowMCP starting (ReadOnly={session.ReadOnly}, credentialsConfigured={session.CredentialsConfigured}). Password is never logged.");
+    $"KashflowMCP starting (ReadOnly={session.ReadOnly}, credentialsConfigured={session.CredentialsConfigured}, restConfigured={session.RestConfigured}). Password and memorable word are never logged.");
 
 await builder.Build().RunAsync();
 return 0;

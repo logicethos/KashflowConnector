@@ -1,7 +1,7 @@
 {
   "name": "kashflow",
   "version": "1.1.0",
-  "description": "Read and optionally write IRIS KashFlow accounting data (customers, suppliers, invoices, receipts, journals, nominals, and bank) through the SOAP API.",
+  "description": "Read and optionally write IRIS KashFlow accounting data (customers, suppliers, invoices, receipts, journals, nominals, and bank) through the SOAP API, plus optional REST bulk purchase payments.",
   "author": {
     "name": "Logic Ethos Ltd"
   },
@@ -16,17 +16,22 @@
       "KASHFLOW_USERNAME": {
         "type": "string",
         "title": "KashFlow SOAP API username",
-        "description": "SOAP API UserName from the KashFlow account. This is not the REST memorable word."
+        "description": "SOAP API UserName from the KashFlow account."
       },
       "KASHFLOW_PASSWORD": {
         "type": "string",
         "title": "KashFlow SOAP API password",
-        "description": "SOAP API Password. Stored as a secret by Cursor and never logged by the server. This is not the REST memorable word."
+        "description": "SOAP API Password. Stored as a secret by Cursor and never logged by the server."
+      },
+      "KASHFLOW_MEMORABLE_WORD": {
+        "type": "string",
+        "title": "KashFlow REST memorable word (secret)",
+        "description": "Optional. Account memorable word for REST KfToken session auth. Enables pay_purchases_bulk (batch pay many receipts as one bank line). Stored as a secret by Cursor and never logged. Leave empty to keep SOAP-only tools."
       },
       "KASHFLOW_READ_ONLY": {
         "type": "boolean",
         "title": "Read only",
-        "description": "When true, only read tools are registered and write SOAP calls are blocked. Set false to enable insert_customer, insert_supplier, insert_invoice, insert_receipt2, and insert_journal.",
+        "description": "When true, only read tools are registered and write SOAP/REST calls are blocked (except dryRun). Set false to enable insert_customer, insert_supplier, insert_invoice, insert_receipt2, insert_journal, pay_purchases_bulk, and other writes.",
         "default": true
       }
     },

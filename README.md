@@ -2,7 +2,7 @@
 
 Typed .NET SOAP client (**KashflowDLL**) and a stdio [MCP](https://modelcontextprotocol.io) server (**KashflowMCP**) for the IRIS KashFlow accounting API. The server lists customers, suppliers, invoices, receipts, payments, products, nominals, journals, and bank accounts, and can insert a customer, supplier, invoice, purchase receipt, or journal when read-only mode is turned off.
 
-Authentication is the **SOAP API username and password**. It is not the REST “memorable word”. The password is never logged.
+Authentication for SOAP tools is the **SOAP API username and password**. Optional REST tools (batch purchase payments) also need the account **memorable word** for KfToken session auth. The password and memorable word are never logged.
 
 ## Install from the Cursor Marketplace
 
@@ -10,10 +10,11 @@ Authentication is the **SOAP API username and password**. It is not the REST “
 2. Open the plugin configuration and set:
    - **KashFlow SOAP API username** (`KASHFLOW_USERNAME`) — SOAP API UserName.
    - **KashFlow SOAP API password** (`KASHFLOW_PASSWORD`) — SOAP API Password. Cursor treats this as a secret. The server never writes it to logs.
+   - **KashFlow REST memorable word** (`KASHFLOW_MEMORABLE_WORD`) — optional. Enables REST tools such as `pay_purchases_bulk`. Treated as a secret; never logged.
    - **Read only** (`KASHFLOW_READ_ONLY`) — defaults to **true**.
 3. Cursor starts `scripts/kashflow-mcp`. That launcher picks the matching self-contained binary from this repository’s GitHub Releases (`v1.1.0`), checks `SHA256SUMS`, caches it under `~/.cache/kashflow-mcp` (or `%LOCALAPPDATA%\kashflow-mcp` on Windows), and execs it. An end user does not need the .NET SDK. The first launch needs network access to `github.com`.
 
-`tools/list` succeeds before those values are saved. The first tool call that talks to KashFlow reports a clear error until the SOAP username and password are set.
+`tools/list` succeeds before those values are saved. The first tool call that talks to KashFlow reports a clear error until the SOAP username and password are set. REST tools appear in `tools/list` only when the memorable word is configured.
 
 `mcp.json` runs `scripts/kashflow-mcp` (a POSIX shell script, via `${CURSOR_PLUGIN_ROOT}`). Windows also gets `scripts/kashflow-mcp.cmd`, which runs `scripts/kashflow-mcp.ps1`. Hosts that resolve an extensionless command through `PATHEXT` (cmd.exe, and the npm-style lookup used by some MCP clients) pick the `.cmd` automatically. The Cursor plugin docs do not define a per-OS command, so that pair is the portable layout.
 
@@ -22,7 +23,7 @@ Authentication is the **SOAP API username and password**. It is not the REST “
 `KashFlow__ReadOnly` defaults to **true**.
 
 - **true** (the marketplace default): only read tools are registered (`get_*`, `is_*`, `search_*`). The SOAP client also refuses every call that would change KashFlow.
-- **false**: write tools are registered as well: `insert_customer`, `insert_supplier`, `insert_invoice`, `insert_receipt2`, `insert_journal`, `insert_receipt_payment`, `allocate_bank_payment_to_receipts`, `insert_fx_receipt_payment`, `write_off_receipt_rounding`, and `transfer_between_bank_accounts`.
+- **false**: write tools are registered as well: `insert_customer`, `insert_supplier`, `insert_invoice`, `insert_receipt2`, `insert_journal`, `insert_receipt_payment`, `allocate_bank_payment_to_receipts`, `insert_fx_receipt_payment`, `write_off_receipt_rounding`, `transfer_between_bank_accounts`, and (when the memorable word is set) `pay_purchases_bulk`.
 
 Each write tool takes a structured object with documented fields (name, addresses, lines, nominals, and so on). You can still pass the previous full SOAP JSON string (`customerJson`, `supplierJson`, `invoiceJson`, `receiptJson`, `journalJson`). When that string is set, it is used and the structured fields are ignored, so extra text and checkbox fields on Customer still work.
 
@@ -37,7 +38,8 @@ These tools record money paid against a purchase receipt (a supplier bill), not 
 | `get_receipt_payments` | read | Payments already on a receipt number, so a receipt is not paid twice. |
 | `search_bank_transactions` | read | Find bank transactions by amount, tolerance, direction, date range, and optional accounts. |
 | `insert_receipt_payment` | write (`KashFlow__ReadOnly=false`) | SOAP `InsertReceiptPayment`. |
-| `allocate_bank_payment_to_receipts` | write | Split one bank amount across several receipts (see [Custom functions](#custom-functions)). |
+| `allocate_bank_payment_to_receipts` | write | Split one bank amount across several receipts via SOAP (N bank lines; see [Custom functions](#custom-functions)). |
+| `pay_purchases_bulk` | write + memorable word | REST batch pay: one bank debit for many receipts (see [REST](#rest-api)). |
 | `insert_fx_receipt_payment` | write | FX receipt paid from GBP (see Custom functions). |
 | `write_off_receipt_rounding` | write | Small balancing payment (see Custom functions). |
 
@@ -99,7 +101,7 @@ The destination nominal id is resolved from `toBankAccountId` / `toBankAccountCo
 
 ### `allocate_bank_payment_to_receipts`
 
-Add-only. Validates before writing: allocations must sum exactly to `totalAmount` (to the penny), receipt numbers must be unique, each receipt must exist, and no allocation may exceed that receipt's outstanding balance (`net + VAT - amountPaid`). Then calls `InsertReceiptPayment` once per allocation. **Each insert creates its own bank-feed line** — this is not KashFlow UI “New batch payment” (one bank debit for many receipts). SOAP has no multi-receipt single-bank-line operation; see [docs/multi-receipt-bank-payment.md](docs/multi-receipt-bank-payment.md). If a later insert fails, earlier successes are left in place and listed so they can be undone with `delete_receipt_payment`.
+Add-only. Validates before writing: allocations must sum exactly to `totalAmount` (to the penny), receipt numbers must be unique, each receipt must exist, and no allocation may exceed that receipt's GBP outstanding (book GBP value minus `AmountPaid`; for FX receipts book value is `(net + VAT) / ExchangeRate`). Then calls `InsertReceiptPayment` once per allocation. **Each insert creates its own bank-feed line** — this is not KashFlow UI “New batch payment”. For one bank debit covering many receipts use [`pay_purchases_bulk`](#pay_purchases_bulk). See [docs/multi-receipt-bank-payment.md](docs/multi-receipt-bank-payment.md). If a later insert fails, earlier successes are left in place and listed so they can be undone with `delete_receipt_payment`.
 
 | Parameter | Required | Meaning |
 | --- | --- | --- |
@@ -109,6 +111,26 @@ Add-only. Validates before writing: allocations must sum exactly to `totalAmount
 | `bankAccountId` / `bankAccountCode` | one | Paying bank account. |
 | `paymentMethodId` / `paymentMethodName` | one | Payment method. |
 | `note` | no | Stored on every payment. |
+
+## REST API
+
+REST tools are registered only when `KashFlow__MemorableWord` (or plugin `KASHFLOW_MEMORABLE_WORD` / env `KASHFLOW_MEMORABLE_WORD`) is set, in addition to the SOAP username and password. Writes still require `KashFlow__ReadOnly=false` (except `dryRun=true`). Session auth uses `POST`/`PUT /v2/sessiontoken` (memorable-word character challenge) then `Authorization: KfToken {SessionToken}`. The token is cached and refreshed on expiry / 401. Password and memorable word are never logged.
+
+KashFlow marks the REST API as unfinished / likely to break; prefer SOAP tools when they cover the job.
+
+### `pay_purchases_bulk`
+
+UI “New batch payment”: one bank-feed debit allocated across several purchase receipts via `POST /v2/purchases/bulk/payments`. Example: Starling `bankAccountCode` **1206**, payment date **2026-09-10**, `totalAmount` **91.28** = KF04199 **2.40** + KF04200 **88.88**.
+
+| Parameter | Required | Meaning |
+| --- | --- | --- |
+| `paymentDate` | yes | Sent as `Date` (`yyyy-MM-dd`). |
+| `totalAmount` | yes | Must equal the sum of allocations to the penny. |
+| `allocations` | yes | `{ receiptNumber, amount }` → `PaymentItems[{ObjectNumber, Amount}]`. |
+| `bankAccountId` / `bankAccountCode` | one | Paying bank → `AccountId`. |
+| `paymentMethodId` / `paymentMethodName` | one | Payment method → `Method`. |
+| `note` | no | Sent as `Comment`. |
+| `dryRun` | no | When `true`, return the exact REST request body without writing. Default `false`. |
 
 ### `search_bank_transactions`
 
@@ -152,11 +174,12 @@ Add-only. Posts a balancing `InsertReceiptPayment` so a near-zero outstanding sh
 
 | Plugin field | Environment variable | Meaning |
 | --- | --- | --- |
-| `KASHFLOW_USERNAME` | `KashFlow__UserName` | SOAP API username. Not the REST memorable word. |
+| `KASHFLOW_USERNAME` | `KashFlow__UserName` | SOAP API username. |
 | `KASHFLOW_PASSWORD` | `KashFlow__Password` | SOAP API password. Never logged. |
+| `KASHFLOW_MEMORABLE_WORD` | `KashFlow__MemorableWord` (also accepts bare `KASHFLOW_MEMORABLE_WORD`) | Optional REST memorable word. Enables REST tools. Never logged. |
 | `KASHFLOW_READ_ONLY` | `KashFlow__ReadOnly` | `true` (default) or `false`. |
 
-Optional, for a local checkout only (not part of the marketplace form): `KashFlow__Endpoint` and `KashFlow__TimeoutSeconds`. The endpoint defaults to `https://securedwebapp.com/api/service.asmx`.
+Optional, for a local checkout only (not part of the marketplace form): `KashFlow__Endpoint`, `KashFlow__RestBaseAddress` (default `https://api.kashflow.com/v2/`), and `KashFlow__TimeoutSeconds`. The SOAP endpoint defaults to `https://securedwebapp.com/api/service.asmx`.
 
 Config also loads from the `KashFlow` section of `appsettings.json`. Do not commit live credentials. `.env.example` lists the variable names with empty values.
 
