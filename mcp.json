@@ -5,6 +5,8 @@
       "env": {
         "KashFlow__UserName": "${KASHFLOW_USERNAME}",
         "KashFlow__Password": "${KASHFLOW_PASSWORD}",
+        "KashFlow__RestUserName": "${KASHFLOW_REST_USERNAME}",
+        "KashFlow__RestPassword": "${KASHFLOW_REST_PASSWORD}",
         "KashFlow__MemorableWord": "${KASHFLOW_MEMORABLE_WORD}",
         "KashFlow__ReadOnly": "${KASHFLOW_READ_ONLY}"
       }

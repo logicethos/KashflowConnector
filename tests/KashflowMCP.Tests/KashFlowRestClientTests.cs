@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using KashflowMCP.Rest;
 using KashflowMCP.Tools;
+using ModelContextProtocol;
 using Xunit;
 
 namespace KashflowMCP.Tests;
@@ -78,6 +79,48 @@ public class KashFlowRestClientTests
         // Second call should not hit the network again.
         await client.EnsureSessionAsync();
         Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task EnsureSession_surfaces_kashflow_login_error_as_mcp_exception_without_secrets()
+    {
+        var handler = new ScriptedHandler(
+        [
+            (req, body) =>
+            {
+                Assert.Equal(HttpMethod.Post, req.Method);
+                Assert.Contains("\"UserName\":\"user\"", body, StringComparison.Ordinal);
+                Assert.Contains($"\"Password\":\"{Password}\"", body, StringComparison.Ordinal);
+                return Json(HttpStatusCode.Unauthorized, """
+                    {"Error":"InvalidCredentials","Message":"Invalid username or password"}
+                    """);
+            },
+        ]);
+
+        using var client = new KashFlowRestClient("user", Password, Memorable, handler);
+        var error = await Assert.ThrowsAsync<KashFlowRestException>(() => client.EnsureSessionAsync());
+
+        Assert.IsAssignableFrom<McpException>(error);
+        Assert.Equal(401, error.StatusCode);
+        Assert.Contains("Invalid username or password", error.Message, StringComparison.Ordinal);
+        Assert.Contains("POST /v2/sessiontoken", error.Message, StringComparison.Ordinal);
+        Assert.Contains("KashFlow__RestUserName", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Password, error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Memorable, error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Password, error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnrichLoginFailure_keeps_kashflow_text_and_omits_secrets()
+    {
+        var enriched = KashFlowRestClient.EnrichLoginFailure(
+            new KashFlowRestException("Invalid username or password", 401),
+            stage: "POST /v2/sessiontoken");
+
+        Assert.Contains("Invalid username or password", enriched.Message, StringComparison.Ordinal);
+        Assert.Contains("KASHFLOW_REST_PASSWORD", enriched.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Password, enriched.Message, StringComparison.Ordinal);
+        Assert.Equal(401, enriched.StatusCode);
     }
 
     [Fact]

@@ -23,6 +23,16 @@
         "title": "KashFlow SOAP API password",
         "description": "SOAP API Password. Stored as a secret by Cursor and never logged by the server."
       },
+      "KASHFLOW_REST_USERNAME": {
+        "type": "string",
+        "title": "KashFlow REST web username (optional)",
+        "description": "Optional. Web login username for REST session auth when it differs from the SOAP API username. Falls back to KASHFLOW_USERNAME when empty."
+      },
+      "KASHFLOW_REST_PASSWORD": {
+        "type": "string",
+        "title": "KashFlow REST web password (secret, optional)",
+        "description": "Optional. Web login password for REST session auth when it differs from the SOAP API password. Stored as a secret by Cursor and never logged. Falls back to KASHFLOW_PASSWORD when empty."
+      },
       "KASHFLOW_MEMORABLE_WORD": {
         "type": "string",
         "title": "KashFlow REST memorable word (secret)",

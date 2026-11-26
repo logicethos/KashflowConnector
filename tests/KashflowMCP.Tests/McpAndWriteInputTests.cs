@@ -182,6 +182,41 @@ public class KashFlowSessionTests
 
         Assert.True(session.CredentialsConfigured);
         Assert.True(session.RestConfigured);
+        Assert.Equal("soap-user", session.RestUserNameForTests);
+        Assert.NotNull(session.RestClient);
+    }
+
+    [Fact]
+    public void Rest_credentials_override_soap_when_set()
+    {
+        using var session = KashFlowSession.FromConfiguration(Config(new Dictionary<string, string?>
+        {
+            ["KashFlow:UserName"] = "soap-user",
+            ["KashFlow:Password"] = Sentinel,
+            ["KashFlow:RestUserName"] = "web-user",
+            ["KashFlow:RestPassword"] = "web-password-secret",
+            ["KashFlow:MemorableWord"] = "pineapple",
+        }));
+
+        Assert.True(session.RestConfigured);
+        Assert.Equal("web-user", session.RestUserNameForTests);
+        Assert.NotNull(session.RestClient);
+        Assert.DoesNotContain("web-password-secret", session.ToString() ?? "", StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Bare_KASHFLOW_REST_env_overrides_soap_credentials()
+    {
+        using var session = KashFlowSession.FromConfiguration(Config(new Dictionary<string, string?>
+        {
+            ["KashFlow:UserName"] = "soap-user",
+            ["KashFlow:Password"] = Sentinel,
+            ["KASHFLOW_REST_USERNAME"] = "env-web-user",
+            ["KASHFLOW_REST_PASSWORD"] = "env-web-password",
+            ["KASHFLOW_MEMORABLE_WORD"] = "pineapple",
+        }));
+
+        Assert.Equal("env-web-user", session.RestUserNameForTests);
         Assert.NotNull(session.RestClient);
     }
 
@@ -237,6 +272,9 @@ public class PluginManifestTests
         Assert.True(properties.TryGetProperty("KASHFLOW_USERNAME", out _));
         Assert.True(properties.TryGetProperty("KASHFLOW_PASSWORD", out var password));
         Assert.Contains("password", password.GetProperty("title").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.True(properties.TryGetProperty("KASHFLOW_REST_USERNAME", out _));
+        Assert.True(properties.TryGetProperty("KASHFLOW_REST_PASSWORD", out var restPassword));
+        Assert.Contains("secret", restPassword.GetProperty("title").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.True(properties.TryGetProperty("KASHFLOW_MEMORABLE_WORD", out var memorable));
         Assert.Contains("secret", memorable.GetProperty("title").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.True(properties.TryGetProperty("KASHFLOW_READ_ONLY", out var readOnly));
@@ -250,6 +288,8 @@ public class PluginManifestTests
         var env = server.GetProperty("env");
         Assert.Equal("${KASHFLOW_USERNAME}", env.GetProperty("KashFlow__UserName").GetString());
         Assert.Equal("${KASHFLOW_PASSWORD}", env.GetProperty("KashFlow__Password").GetString());
+        Assert.Equal("${KASHFLOW_REST_USERNAME}", env.GetProperty("KashFlow__RestUserName").GetString());
+        Assert.Equal("${KASHFLOW_REST_PASSWORD}", env.GetProperty("KashFlow__RestPassword").GetString());
         Assert.Equal("${KASHFLOW_MEMORABLE_WORD}", env.GetProperty("KashFlow__MemorableWord").GetString());
         Assert.Equal("${KASHFLOW_READ_ONLY}", env.GetProperty("KashFlow__ReadOnly").GetString());
 

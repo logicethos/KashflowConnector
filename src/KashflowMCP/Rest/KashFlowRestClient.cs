@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ModelContextProtocol;
 
 namespace KashflowMCP.Rest;
 
@@ -444,8 +445,16 @@ public sealed class KashFlowRestClient : IDisposable
         };
 
         using var challengeResponse = await _http.SendAsync(post, cancellationToken).ConfigureAwait(false);
-        var challenge = await ReadSuccessAsync<RestSessionChallengeResponse>(challengeResponse, cancellationToken)
-            .ConfigureAwait(false);
+        RestSessionChallengeResponse challenge;
+        try
+        {
+            challenge = await ReadSuccessAsync<RestSessionChallengeResponse>(challengeResponse, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (KashFlowRestException ex)
+        {
+            throw EnrichLoginFailure(ex, stage: "POST /v2/sessiontoken");
+        }
 
         if (string.IsNullOrWhiteSpace(challenge.TemporaryToken))
             throw new KashFlowRestException("KashFlow REST login did not return a temporary token.");
@@ -465,8 +474,17 @@ public sealed class KashFlowRestClient : IDisposable
         };
 
         using var tokenResponse = await _http.SendAsync(put, cancellationToken).ConfigureAwait(false);
-        var token = await ReadSuccessAsync<RestSessionTokenResponse>(tokenResponse, cancellationToken)
-            .ConfigureAwait(false);
+        RestSessionTokenResponse token;
+        try
+        {
+            token = await ReadSuccessAsync<RestSessionTokenResponse>(tokenResponse, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (KashFlowRestException ex)
+        {
+            throw EnrichLoginFailure(ex, stage: "PUT /v2/sessiontoken");
+        }
+
         if (string.IsNullOrWhiteSpace(token.SessionToken))
             throw new KashFlowRestException("KashFlow REST login did not return a session token.");
 
@@ -672,13 +690,34 @@ public sealed class KashFlowRestClient : IDisposable
         return payload.Length <= 300 ? payload : payload[..300];
     }
 
+    /// <summary>
+    /// Keeps KashFlow's error text (no secrets) and adds a short REST-vs-SOAP credential hint on login failures.
+    /// </summary>
+    internal static KashFlowRestException EnrichLoginFailure(KashFlowRestException ex, string stage)
+    {
+        ArgumentNullException.ThrowIfNull(ex);
+        var detail = string.IsNullOrWhiteSpace(ex.Message) ? "login failed" : ex.Message.Trim();
+        var status = ex.StatusCode is int code ? $" HTTP {code}" : "";
+        var hint =
+            " SOAP API UserName/Password often differ from the web login REST uses; " +
+            "set KashFlow__RestUserName / KashFlow__RestPassword (or KASHFLOW_REST_USERNAME / KASHFLOW_REST_PASSWORD) when needed. " +
+            "Passwords are never logged.";
+        return new KashFlowRestException(
+            $"KashFlow REST {stage} failed{status}: {detail}.{hint}",
+            ex.StatusCode);
+    }
+
     private void ThrowIfDisposed()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
     }
 }
 
-public sealed class KashFlowRestException : Exception
+/// <summary>
+/// REST API failure. Derives from <see cref="McpException"/> so the MCP host surfaces the message
+/// (including KashFlow's error text) instead of a generic "An error occurred invoking …".
+/// </summary>
+public sealed class KashFlowRestException : McpException
 {
     public KashFlowRestException(string message, int? statusCode = null)
         : base(message)

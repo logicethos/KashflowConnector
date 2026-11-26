@@ -13,6 +13,8 @@ public sealed class KashFlowSession : IDisposable
 {
     private readonly object _gate = new();
     private readonly KashFlowClientOptions? _options;
+    private readonly string? _restUserName;
+    private readonly string? _restPassword;
     private readonly string? _memorableWord;
     private readonly Uri _restBaseAddress;
     private KashFlowClient? _client;
@@ -23,6 +25,8 @@ public sealed class KashFlowSession : IDisposable
         bool credentialsConfigured,
         bool restConfigured,
         KashFlowClientOptions? options,
+        string? restUserName,
+        string? restPassword,
         string? memorableWord,
         Uri restBaseAddress)
     {
@@ -30,6 +34,8 @@ public sealed class KashFlowSession : IDisposable
         CredentialsConfigured = credentialsConfigured;
         RestConfigured = restConfigured;
         _options = options;
+        _restUserName = restUserName;
+        _restPassword = restPassword;
         _memorableWord = memorableWord;
         _restBaseAddress = restBaseAddress;
     }
@@ -74,7 +80,10 @@ public sealed class KashFlowSession : IDisposable
     {
         get
         {
-            if (!RestConfigured || _options is null || string.IsNullOrEmpty(_memorableWord))
+            if (!RestConfigured
+                || string.IsNullOrEmpty(_restUserName)
+                || string.IsNullOrEmpty(_restPassword)
+                || string.IsNullOrEmpty(_memorableWord))
                 return null;
 
             if (_restClient is not null)
@@ -83,13 +92,19 @@ public sealed class KashFlowSession : IDisposable
             lock (_gate)
             {
                 return _restClient ??= new KashFlowRestClient(
-                    _options.UserName,
-                    _options.Password,
+                    _restUserName,
+                    _restPassword,
                     _memorableWord,
                     baseAddress: _restBaseAddress);
             }
         }
     }
+
+    /// <summary>
+    /// Username used for REST session login (optional <c>RestUserName</c>, else SOAP username).
+    /// Exposed for tests; never logged by the server.
+    /// </summary>
+    internal string? RestUserNameForTests => _restUserName;
 
     public static KashFlowSession FromConfiguration(IConfiguration configuration)
     {
@@ -101,6 +116,15 @@ public sealed class KashFlowSession : IDisposable
         var memorableWord = FirstNonEmpty(
             section["MemorableWord"],
             configuration["KASHFLOW_MEMORABLE_WORD"]);
+        // REST login often needs the web username/password; SOAP API creds can differ.
+        var restUserName = FirstNonEmpty(
+            section["RestUserName"],
+            configuration["KASHFLOW_REST_USERNAME"],
+            userName);
+        var restPassword = FirstNonEmpty(
+            section["RestPassword"],
+            configuration["KASHFLOW_REST_PASSWORD"],
+            password);
 
         var restBase = new Uri(KashFlowRestClient.DefaultBaseAddress);
         if (Uri.TryCreate(section["RestBaseAddress"], UriKind.Absolute, out var parsedRest))
@@ -115,6 +139,8 @@ public sealed class KashFlowSession : IDisposable
                 credentialsConfigured: false,
                 restConfigured: false,
                 options: null,
+                restUserName: null,
+                restPassword: null,
                 memorableWord: null,
                 restBaseAddress: restBase);
         }
@@ -140,6 +166,8 @@ public sealed class KashFlowSession : IDisposable
             credentialsConfigured: true,
             restConfigured,
             options,
+            restConfigured ? restUserName!.Trim() : null,
+            restConfigured ? restPassword : null,
             restConfigured ? memorableWord!.Trim() : null,
             restBase);
     }

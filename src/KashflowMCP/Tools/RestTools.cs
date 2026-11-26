@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using KashFlow;
 using KashflowMCP.Rest;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
 namespace KashflowMCP.Tools;
@@ -636,9 +637,10 @@ public sealed class RestTools(KashFlowSession session, McpRuntimeOptions runtime
 
     private KashFlowRestClient RequireRest(string toolName)
         => session.RestClient
-            ?? throw new InvalidOperationException(
+            ?? throw new McpException(
                 $"{toolName} needs KashFlow__MemorableWord (or KASHFLOW_MEMORABLE_WORD) for REST session auth. " +
-                "SOAP username/password alone are not enough. The memorable word is never logged.");
+                "SOAP username/password alone are not enough. Optional KashFlow__RestUserName / KashFlow__RestPassword " +
+                "override SOAP credentials for REST login when the web login differs. Secrets are never logged.");
 
     private async Task<int> ResolveAccountAsync(
         int? bankAccountId,

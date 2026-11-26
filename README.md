@@ -2,7 +2,7 @@
 
 Typed .NET SOAP client (**KashflowDLL**) and a stdio [MCP](https://modelcontextprotocol.io) server (**KashflowMCP**) for the IRIS KashFlow accounting API. The server lists customers, suppliers, invoices, receipts, payments, products, nominals, journals, and bank accounts, and can insert a customer, supplier, invoice, purchase receipt, or journal when read-only mode is turned off.
 
-Authentication for SOAP tools is the **SOAP API username and password**. Optional REST tools (bulk payments, bank-feed linking, purchase files, reconciliations) also need the account **memorable word** for KfToken session auth. The password and memorable word are never logged.
+Authentication for SOAP tools is the **SOAP API username and password**. Optional REST tools (bulk payments, bank-feed linking, purchase files, reconciliations) also need the account **memorable word** for KfToken session auth. REST login often needs the **web** username/password (optional `KASHFLOW_REST_USERNAME` / `KASHFLOW_REST_PASSWORD`); when unset, SOAP credentials are reused. Passwords and the memorable word are never logged.
 
 ## Install from the Cursor Marketplace
 
@@ -10,11 +10,13 @@ Authentication for SOAP tools is the **SOAP API username and password**. Optiona
 2. Open the plugin configuration and set:
    - **KashFlow SOAP API username** (`KASHFLOW_USERNAME`) — SOAP API UserName.
    - **KashFlow SOAP API password** (`KASHFLOW_PASSWORD`) — SOAP API Password. Cursor treats this as a secret. The server never writes it to logs.
+   - **KashFlow REST web username** (`KASHFLOW_REST_USERNAME`) — optional. Use when REST session login needs the web username (SOAP API username often differs). Falls back to `KASHFLOW_USERNAME`.
+   - **KashFlow REST web password** (`KASHFLOW_REST_PASSWORD`) — optional. Web login password for REST. Treated as a secret; never logged. Falls back to `KASHFLOW_PASSWORD`.
    - **KashFlow REST memorable word** (`KASHFLOW_MEMORABLE_WORD`) — optional. Enables REST tools (`pay_purchases_bulk`, bank-feed link, purchase files, reconciliations, …). Treated as a secret; never logged.
    - **Read only** (`KASHFLOW_READ_ONLY`) — defaults to **true**.
 3. Cursor starts `scripts/kashflow-mcp`. That launcher picks the matching self-contained binary from this repository’s GitHub Releases (`v1.1.0`), checks `SHA256SUMS`, caches it under `~/.cache/kashflow-mcp` (or `%LOCALAPPDATA%\kashflow-mcp` on Windows), and execs it. An end user does not need the .NET SDK. The first launch needs network access to `github.com`.
 
-`tools/list` succeeds before those values are saved. The first tool call that talks to KashFlow reports a clear error until the SOAP username and password are set. REST tools appear in `tools/list` only when the memorable word is configured.
+`tools/list` succeeds before those values are saved. The first tool call that talks to KashFlow reports a clear error until the SOAP username and password are set. REST tools appear in `tools/list` only when the memorable word is configured. REST login failures include KashFlow’s error text (for example `Invalid username or password`) plus a hint to set the optional REST credentials.
 
 `mcp.json` runs `scripts/kashflow-mcp` (a POSIX shell script, via `${CURSOR_PLUGIN_ROOT}`). Windows also gets `scripts/kashflow-mcp.cmd`, which runs `scripts/kashflow-mcp.ps1`. Hosts that resolve an extensionless command through `PATHEXT` (cmd.exe, and the npm-style lookup used by some MCP clients) pick the `.cmd` automatically. The Cursor plugin docs do not define a per-OS command, so that pair is the portable layout.
 
@@ -118,7 +120,7 @@ Add-only. Validates before writing: allocations must sum exactly to `totalAmount
 
 ## REST API
 
-REST tools are registered only when `KashFlow__MemorableWord` (or plugin `KASHFLOW_MEMORABLE_WORD` / env `KASHFLOW_MEMORABLE_WORD`) is set, in addition to the SOAP username and password. Writes still require `KashFlow__ReadOnly=false` (except `dryRun=true`). Session auth uses `POST`/`PUT /v2/sessiontoken` (memorable-word character challenge) then `Authorization: KfToken {SessionToken}`. The token is cached and refreshed on expiry / 401. Password and memorable word are never logged.
+REST tools are registered only when `KashFlow__MemorableWord` (or plugin `KASHFLOW_MEMORABLE_WORD` / env `KASHFLOW_MEMORABLE_WORD`) is set, in addition to the SOAP username and password. Writes still require `KashFlow__ReadOnly=false` (except `dryRun=true`). Session auth uses `POST`/`PUT /v2/sessiontoken` (memorable-word character challenge) then `Authorization: KfToken {SessionToken}`. The token is cached and refreshed on expiry / 401. Optional `KashFlow__RestUserName` / `KashFlow__RestPassword` (or `KASHFLOW_REST_USERNAME` / `KASHFLOW_REST_PASSWORD`) override SOAP credentials for that login — KashFlow’s REST API expects the web login, which often differs from SOAP API credentials. Passwords and memorable word are never logged.
 
 KashFlow marks the REST API as unfinished / likely to break; prefer SOAP tools when they cover the job.
 
@@ -228,6 +230,8 @@ Add-only. Posts a balancing `InsertReceiptPayment` so a near-zero outstanding sh
 | --- | --- | --- |
 | `KASHFLOW_USERNAME` | `KashFlow__UserName` | SOAP API username. |
 | `KASHFLOW_PASSWORD` | `KashFlow__Password` | SOAP API password. Never logged. |
+| `KASHFLOW_REST_USERNAME` | `KashFlow__RestUserName` (also accepts bare `KASHFLOW_REST_USERNAME`) | Optional REST web username. Falls back to SOAP username. |
+| `KASHFLOW_REST_PASSWORD` | `KashFlow__RestPassword` (also accepts bare `KASHFLOW_REST_PASSWORD`) | Optional REST web password. Never logged. Falls back to SOAP password. |
 | `KASHFLOW_MEMORABLE_WORD` | `KashFlow__MemorableWord` (also accepts bare `KASHFLOW_MEMORABLE_WORD`) | Optional REST memorable word. Enables REST tools. Never logged. |
 | `KASHFLOW_READ_ONLY` | `KashFlow__ReadOnly` | `true` (default) or `false`. |
 
