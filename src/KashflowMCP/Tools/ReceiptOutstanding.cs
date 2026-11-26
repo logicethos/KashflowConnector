@@ -5,10 +5,26 @@ namespace KashflowMCP.Tools;
 /// <summary>Helpers for purchase-receipt balances and payment construction.</summary>
 public static class ReceiptOutstanding
 {
+    /// <summary>
+    /// GBP book value of a purchase receipt. SOAP payment lines are in home currency (GBP).
+    /// For FX receipts, KashFlow stores <see cref="Receipt2.ExchangeRate"/> as foreign units per GBP,
+    /// so book value is <c>(net + VAT) / ExchangeRate</c>. When ExchangeRate is unset (0), net+VAT
+    /// is treated as already in GBP.
+    /// </summary>
+    public static decimal BookValueGbp(Receipt2 receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        var foreignTotal = receipt.NetAmount + receipt.VATAmount;
+        if (receipt.ExchangeRate > 0)
+            return decimal.Round(foreignTotal / receipt.ExchangeRate, 2, MidpointRounding.AwayFromZero);
+        return decimal.Round(foreignTotal, 2, MidpointRounding.AwayFromZero);
+    }
+
+    /// <summary>GBP outstanding = book GBP value minus GBP <see cref="Receipt2.AmountPaid"/>.</summary>
     public static decimal Balance(Receipt2 receipt)
     {
         ArgumentNullException.ThrowIfNull(receipt);
-        return decimal.Round(receipt.NetAmount + receipt.VATAmount - receipt.AmountPaid, 2, MidpointRounding.AwayFromZero);
+        return decimal.Round(BookValueGbp(receipt) - receipt.AmountPaid, 2, MidpointRounding.AwayFromZero);
     }
 
     public static string FormatReceiptLabel(int receiptNumber)

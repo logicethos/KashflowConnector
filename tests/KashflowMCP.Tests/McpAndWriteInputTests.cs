@@ -163,10 +163,39 @@ public class KashFlowSessionTests
 
         Assert.True(session.ReadOnly);
         Assert.False(session.CredentialsConfigured);
+        Assert.False(session.RestConfigured);
         var error = Assert.Throws<ModelContextProtocol.McpException>(() => session.Client);
-        Assert.Contains("SOAP", error.Message, StringComparison.Ordinal);
         Assert.Contains("never logged", error.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(Sentinel, error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Memorable_word_enables_rest_without_echoing_secrets()
+    {
+        using var session = KashFlowSession.FromConfiguration(Config(new Dictionary<string, string?>
+        {
+            ["KashFlow:UserName"] = "soap-user",
+            ["KashFlow:Password"] = Sentinel,
+            ["KashFlow:MemorableWord"] = "pineapple",
+            ["KashFlow:ReadOnly"] = "true",
+        }));
+
+        Assert.True(session.CredentialsConfigured);
+        Assert.True(session.RestConfigured);
+        Assert.NotNull(session.RestClient);
+    }
+
+    [Fact]
+    public void Bare_KASHFLOW_MEMORABLE_WORD_env_is_accepted()
+    {
+        using var session = KashFlowSession.FromConfiguration(Config(new Dictionary<string, string?>
+        {
+            ["KashFlow:UserName"] = "soap-user",
+            ["KashFlow:Password"] = Sentinel,
+            ["KASHFLOW_MEMORABLE_WORD"] = "pineapple",
+        }));
+
+        Assert.True(session.RestConfigured);
     }
 
     [Fact]
@@ -208,6 +237,8 @@ public class PluginManifestTests
         Assert.True(properties.TryGetProperty("KASHFLOW_USERNAME", out _));
         Assert.True(properties.TryGetProperty("KASHFLOW_PASSWORD", out var password));
         Assert.Contains("password", password.GetProperty("title").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.True(properties.TryGetProperty("KASHFLOW_MEMORABLE_WORD", out var memorable));
+        Assert.Contains("secret", memorable.GetProperty("title").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.True(properties.TryGetProperty("KASHFLOW_READ_ONLY", out var readOnly));
         Assert.Equal("boolean", readOnly.GetProperty("type").GetString());
         Assert.True(readOnly.GetProperty("default").GetBoolean());
@@ -219,6 +250,7 @@ public class PluginManifestTests
         var env = server.GetProperty("env");
         Assert.Equal("${KASHFLOW_USERNAME}", env.GetProperty("KashFlow__UserName").GetString());
         Assert.Equal("${KASHFLOW_PASSWORD}", env.GetProperty("KashFlow__Password").GetString());
+        Assert.Equal("${KASHFLOW_MEMORABLE_WORD}", env.GetProperty("KashFlow__MemorableWord").GetString());
         Assert.Equal("${KASHFLOW_READ_ONLY}", env.GetProperty("KashFlow__ReadOnly").GetString());
 
         foreach (var file in new[] { ".cursor-plugin/plugin.json", "mcp.json" })
@@ -310,11 +342,13 @@ public class McpToolsListTests
         Assert.DoesNotContain("create_account", names);
         Assert.DoesNotContain("sage_file", names);
         Assert.DoesNotContain("transfer_between_bank_accounts", names);
+        Assert.DoesNotContain("pay_purchases_bulk", names);
 
         var joined = string.Join("\n", stderr);
-        Assert.Contains("Password is never logged.", joined, StringComparison.Ordinal);
+        Assert.Contains("never logged", joined, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("ReadOnly=True", joined, StringComparison.Ordinal);
         Assert.Contains("credentialsConfigured=False", joined, StringComparison.Ordinal);
+        Assert.Contains("restConfigured=False", joined, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -373,6 +407,7 @@ public class McpToolsListTests
                      "write_off_receipt_rounding",
                  })
             Assert.Contains(writeName, tools.Keys);
+        Assert.DoesNotContain("pay_purchases_bulk", tools.Keys);
         Assert.Equal(1, tools.Keys.Count(name => name == "insert_bank_transaction"));
         Assert.True(tools["insert_invoice_payment"].JsonSchema.GetProperty("properties").TryGetProperty("invoicePayment", out _));
         Assert.True(tools["delete_receipt_payment"].JsonSchema.GetProperty("properties").TryGetProperty("receiptPaymentNumber", out _));
@@ -421,6 +456,44 @@ public class McpToolsListTests
         var name = ResolveSchema(tools["insert_customer"].JsonSchema, Property(customer, "properties", "name"));
         Assert.True(name.TryGetProperty("description", out var description));
         Assert.Contains("name", description.GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RestTools_register_only_when_memorable_word_is_configured()
+    {
+        await using var without = await ConnectAsync(new Dictionary<string, string?>
+        {
+            ["KashFlow__UserName"] = "soap-user",
+            ["KashFlow__Password"] = Sentinel,
+            ["KashFlow__ReadOnly"] = "false",
+        }, []);
+        Assert.DoesNotContain(
+            "pay_purchases_bulk",
+            (await without.ListToolsAsync()).Select(tool => tool.Name));
+
+        var stderr = new List<string>();
+        await using var withRest = await ConnectAsync(new Dictionary<string, string?>
+        {
+            ["KashFlow__UserName"] = "soap-user",
+            ["KashFlow__Password"] = Sentinel,
+            ["KashFlow__MemorableWord"] = "pineapple",
+            ["KashFlow__ReadOnly"] = "false",
+        }, stderr);
+
+        var tools = (await withRest.ListToolsAsync()).ToDictionary(tool => tool.Name, StringComparer.Ordinal);
+        Assert.Contains("pay_purchases_bulk", tools.Keys);
+        var schema = tools["pay_purchases_bulk"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[]
+                 {
+                     "paymentDate", "totalAmount", "allocations", "bankAccountId", "bankAccountCode",
+                     "paymentMethodId", "paymentMethodName", "note", "dryRun",
+                 })
+            Assert.True(schema.TryGetProperty(field, out _), field);
+
+        var logs = string.Join("\n", stderr);
+        Assert.Contains("restConfigured=True", logs, StringComparison.Ordinal);
+        Assert.DoesNotContain("pineapple", logs, StringComparison.Ordinal);
+        Assert.DoesNotContain(Sentinel, logs, StringComparison.Ordinal);
     }
 
     private static void AssertWriteSchema(McpClientTool tool, string structuredName, string legacyName, params string[] fields)

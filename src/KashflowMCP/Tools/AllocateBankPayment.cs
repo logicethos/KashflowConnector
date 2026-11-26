@@ -3,7 +3,8 @@ using KashFlow;
 namespace KashflowMCP.Tools;
 
 /// <summary>
-/// Splits one bank payment across several purchase receipts (add-only InsertReceiptPayment calls).
+/// Splits one bank amount across several purchase receipts (add-only InsertReceiptPayment calls).
+/// Each insert creates a separate bank-feed line; SOAP cannot mirror UI batch payment (one debit for many receipts).
 /// </summary>
 public static class AllocateBankPayment
 {
