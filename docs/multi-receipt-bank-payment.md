@@ -21,11 +21,11 @@ Tool: **`pay_purchases_bulk`** → `POST https://api.kashflow.com/v2/purchases/b
 Requires:
 
 - SOAP `KashFlow__UserName` / `KashFlow__Password`
-- Optional REST `KashFlow__RestUserName` / `KashFlow__RestPassword` (or `KASHFLOW_REST_USERNAME` / `KASHFLOW_REST_PASSWORD`) when the web login differs from SOAP API credentials (common cause of `Invalid username or password` on `POST /v2/sessiontoken`)
+- REST web password `KashFlow__RestPassword` / `KASHFLOW_REST_PASSWORD` (SOAP UserName is reused; optional `RestUserName` only if needed). SOAP keeps `KashFlow__Password` — the web password fails SOAP.
 - REST `KashFlow__MemorableWord` (or `KASHFLOW_MEMORABLE_WORD`) for KfToken session auth
 - `KashFlow__ReadOnly=false` for a real write (`dryRun=true` validates without writing)
 
-Auth flow: `POST /v2/sessiontoken` → memorable-word character challenge → `PUT /v2/sessiontoken` → `Authorization: KfToken {SessionToken}` ([Authentication](https://www.kashflow.com/developers/rest-api/authentication/), [Session token](https://www.kashflow.com/developers/rest-api/sessiontoken/), [Bulk Payments](https://www.kashflow.com/developers/rest-api/bulk-payment/)). Login failures surface KashFlow’s error text in the tool result (no secrets).
+Auth flow: `POST /v2/sessiontoken` → memorable-word character challenge → `PUT /v2/sessiontoken` → `Authorization: KfToken {SessionToken}` ([Authentication](https://www.kashflow.com/developers/rest-api/authentication/), [Session token](https://www.kashflow.com/developers/rest-api/sessiontoken/), [Bulk Payments](https://www.kashflow.com/developers/rest-api/bulk-payment/)). REST failures (login, files, etc.) surface KashFlow’s API error text in the tool result (no secrets).
 
 Example dry-run body for the Starling case (account id and method id resolved at runtime):
 

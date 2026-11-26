@@ -104,7 +104,7 @@ public class KashFlowRestClientTests
         Assert.Equal(401, error.StatusCode);
         Assert.Contains("Invalid username or password", error.Message, StringComparison.Ordinal);
         Assert.Contains("POST /v2/sessiontoken", error.Message, StringComparison.Ordinal);
-        Assert.Contains("KashFlow__RestUserName", error.Message, StringComparison.Ordinal);
+        Assert.Contains("KashFlow__RestPassword", error.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(Password, error.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(Memorable, error.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(Password, error.ToString(), StringComparison.Ordinal);
@@ -121,6 +121,57 @@ public class KashFlowRestClientTests
         Assert.Contains("KASHFLOW_REST_PASSWORD", enriched.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(Password, enriched.Message, StringComparison.Ordinal);
         Assert.Equal(401, enriched.StatusCode);
+    }
+
+    [Fact]
+    public void EnrichLoginFailure_strips_format_prefix_without_duplicating()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.Unauthorized) { ReasonPhrase = "Unauthorized" };
+        var enriched = KashFlowRestClient.EnrichLoginFailure(
+            KashFlowRestClient.FormatRestFailure(
+                response,
+                """{"Error":"InvalidCredentials","Message":"Invalid username or password"}"""),
+            stage: "POST /v2/sessiontoken");
+
+        Assert.Contains("Invalid username or password", enriched.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("KashFlow REST error HTTP", enriched.Message, StringComparison.Ordinal);
+        Assert.Contains("POST /v2/sessiontoken failed HTTP 401", enriched.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ListPurchaseFiles_surfaces_kashflow_api_message_as_mcp_exception()
+    {
+        var handler = new ScriptedHandler(
+        [
+            (_, _) => Json(HttpStatusCode.OK, """
+                {"TemporaryToken":"temp-1","MemorableWordList":[{"Position":1,"Value":""}]}
+                """),
+            (_, _) => Json(HttpStatusCode.OK, """{"SessionToken":"sess-1"}"""),
+            (req, _) =>
+            {
+                Assert.Equal(HttpMethod.Get, req.Method);
+                Assert.EndsWith("/purchases/4200/files", req.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+                return Json(HttpStatusCode.Forbidden, """
+                    {
+                      "Error":"NotAuthorised",
+                      "Message":"The url specified is not authorised. User Dropbox account is not setup."
+                    }
+                    """);
+            },
+        ]);
+
+        using var client = new KashFlowRestClient("user", Password, Memorable, handler);
+        var error = await Assert.ThrowsAsync<KashFlowRestException>(() => client.ListPurchaseFilesAsync(4200));
+
+        Assert.IsAssignableFrom<McpException>(error);
+        Assert.Equal(403, error.StatusCode);
+        Assert.Contains(
+            "The url specified is not authorised. User Dropbox account is not setup.",
+            error.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("KashFlow REST error HTTP 403", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Password, error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Memorable, error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

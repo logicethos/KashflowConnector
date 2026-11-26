@@ -639,8 +639,8 @@ public sealed class RestTools(KashFlowSession session, McpRuntimeOptions runtime
         => session.RestClient
             ?? throw new McpException(
                 $"{toolName} needs KashFlow__MemorableWord (or KASHFLOW_MEMORABLE_WORD) for REST session auth. " +
-                "SOAP username/password alone are not enough. Optional KashFlow__RestUserName / KashFlow__RestPassword " +
-                "override SOAP credentials for REST login when the web login differs. Secrets are never logged.");
+                "REST sessiontoken uses the web login password (KashFlow__RestPassword / KASHFLOW_REST_PASSWORD); " +
+                "RestUserName is optional and defaults to the SOAP UserName. Secrets are never logged.");
 
     private async Task<int> ResolveAccountAsync(
         int? bankAccountId,

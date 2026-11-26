@@ -25,13 +25,13 @@
       },
       "KASHFLOW_REST_USERNAME": {
         "type": "string",
-        "title": "KashFlow REST web username (optional)",
-        "description": "Optional. Web login username for REST session auth when it differs from the SOAP API username. Falls back to KASHFLOW_USERNAME when empty."
+        "title": "KashFlow REST username (optional)",
+        "description": "Optional. Defaults to KASHFLOW_USERNAME (SOAP UserName). Usually leave empty — REST sessiontoken works with the SOAP username plus the web login password."
       },
       "KASHFLOW_REST_PASSWORD": {
         "type": "string",
-        "title": "KashFlow REST web password (secret, optional)",
-        "description": "Optional. Web login password for REST session auth when it differs from the SOAP API password. Stored as a secret by Cursor and never logged. Falls back to KASHFLOW_PASSWORD when empty."
+        "title": "KashFlow REST web password (secret)",
+        "description": "Web login password for REST sessiontoken (often differs from the SOAP API password). Stored as a secret by Cursor and never logged. When empty, falls back to KASHFLOW_PASSWORD."
       },
       "KASHFLOW_MEMORABLE_WORD": {
         "type": "string",

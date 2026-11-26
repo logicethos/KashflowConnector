@@ -629,10 +629,7 @@ public sealed class KashFlowRestClient : IDisposable
     {
         var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
-        {
-            var message = TryParseError(payload) ?? $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}";
-            throw new KashFlowRestException(message, (int)response.StatusCode);
-        }
+            throw FormatRestFailure(response, payload);
 
         if (typeof(T) == typeof(JsonElement))
         {
@@ -664,8 +661,25 @@ public sealed class KashFlowRestClient : IDisposable
         if (response.IsSuccessStatusCode)
             return;
 
-        var message = TryParseError(payload) ?? $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}";
-        throw new KashFlowRestException(message, (int)response.StatusCode);
+        throw FormatRestFailure(response, payload);
+    }
+
+    /// <summary>
+    /// Builds a tool-visible REST failure that always includes KashFlow's API message (no secrets).
+    /// </summary>
+    internal static KashFlowRestException FormatRestFailure(HttpResponseMessage response, string payload)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        var code = (int)response.StatusCode;
+        var detail = TryParseError(payload)
+            ?? (string.IsNullOrWhiteSpace(response.ReasonPhrase)
+                ? $"HTTP {code}"
+                : $"HTTP {code} {response.ReasonPhrase}");
+        detail = detail.Trim();
+        // Avoid "KashFlow REST error HTTP 403: HTTP 403 Forbidden" when the body was empty.
+        if (detail.StartsWith($"HTTP {code}", StringComparison.Ordinal))
+            return new KashFlowRestException($"KashFlow REST error: {detail}", code);
+        return new KashFlowRestException($"KashFlow REST error HTTP {code}: {detail}", code);
     }
 
     private static string? TryParseError(string payload)
@@ -678,29 +692,45 @@ public sealed class KashFlowRestClient : IDisposable
             if (error is null)
                 return null;
             if (!string.IsNullOrWhiteSpace(error.Message))
-                return error.Message;
+                return error.Message.Trim();
             if (!string.IsNullOrWhiteSpace(error.Error))
-                return error.Error;
+                return error.Error.Trim();
         }
         catch (JsonException)
         {
             // Fall through to a truncated raw body (never include secrets — caller never put them here).
         }
 
-        return payload.Length <= 300 ? payload : payload[..300];
+        // Plain-text API bodies (some file endpoints) still need to reach the tool caller.
+        var trimmed = payload.Trim();
+        return trimmed.Length <= 300 ? trimmed : trimmed[..300];
     }
 
     /// <summary>
     /// Keeps KashFlow's error text (no secrets) and adds a short REST-vs-SOAP credential hint on login failures.
+    /// REST sessiontoken uses the web login password (<c>KashFlow__RestPassword</c>); SOAP keeps <c>KashFlow__Password</c>.
     /// </summary>
     internal static KashFlowRestException EnrichLoginFailure(KashFlowRestException ex, string stage)
     {
         ArgumentNullException.ThrowIfNull(ex);
+        // Strip the FormatRestFailure prefix so the final message stays one clear sentence.
         var detail = string.IsNullOrWhiteSpace(ex.Message) ? "login failed" : ex.Message.Trim();
+        const string prefix = "KashFlow REST error HTTP ";
+        if (detail.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            var colon = detail.IndexOf(": ", StringComparison.Ordinal);
+            if (colon > 0 && colon + 2 < detail.Length)
+                detail = detail[(colon + 2)..].Trim();
+        }
+        else if (detail.StartsWith("KashFlow REST error: ", StringComparison.Ordinal))
+        {
+            detail = detail["KashFlow REST error: ".Length..].Trim();
+        }
+
         var status = ex.StatusCode is int code ? $" HTTP {code}" : "";
         var hint =
-            " SOAP API UserName/Password often differ from the web login REST uses; " +
-            "set KashFlow__RestUserName / KashFlow__RestPassword (or KASHFLOW_REST_USERNAME / KASHFLOW_REST_PASSWORD) when needed. " +
+            " REST sessiontoken needs the web login password via KashFlow__RestPassword / KASHFLOW_REST_PASSWORD " +
+            "(SOAP UserName is reused when RestUserName is unset; SOAP still uses KashFlow__Password). " +
             "Passwords are never logged.";
         return new KashFlowRestException(
             $"KashFlow REST {stage} failed{status}: {detail}.{hint}",
