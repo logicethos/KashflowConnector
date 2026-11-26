@@ -481,7 +481,25 @@ public class McpToolsListTests
         }, stderr);
 
         var tools = (await withRest.ListToolsAsync()).ToDictionary(tool => tool.Name, StringComparer.Ordinal);
-        Assert.Contains("pay_purchases_bulk", tools.Keys);
+        foreach (var name in new[]
+                 {
+                     "pay_purchases_bulk",
+                     "link_bank_transactions_to_purchases",
+                     "get_purchases_bulk_payment",
+                     "update_purchases_bulk_payment",
+                     "delete_purchases_bulk_payment",
+                     "update_purchase_payment_lines",
+                     "list_purchase_files",
+                     "attach_purchase_file",
+                     "delete_purchase_file",
+                     "list_bank_reconciliations",
+                     "get_bank_reconciliation_metadata",
+                     "get_bank_reconciliation",
+                     "list_bank_account_transactions",
+                     "list_bank_feed_transactions",
+                 })
+            Assert.Contains(name, tools.Keys);
+
         var schema = tools["pay_purchases_bulk"].JsonSchema.GetProperty("properties");
         foreach (var field in new[]
                  {
@@ -489,6 +507,22 @@ public class McpToolsListTests
                      "paymentMethodId", "paymentMethodName", "note", "dryRun",
                  })
             Assert.True(schema.TryGetProperty(field, out _), field);
+
+        var link = tools["link_bank_transactions_to_purchases"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[] { "assignments", "bankAccountId", "bankAccountCode", "paymentMethodId", "dryRun" })
+            Assert.True(link.TryGetProperty(field, out _), field);
+
+        var paymentLines = tools["update_purchase_payment_lines"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[] { "receiptNumber", "paymentLines", "replaceAll", "dryRun" })
+            Assert.True(paymentLines.TryGetProperty(field, out _), field);
+
+        var attach = tools["attach_purchase_file"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[] { "receiptNumber", "filePath", "contentBase64", "fileName", "dryRun" })
+            Assert.True(attach.TryGetProperty(field, out _), field);
+
+        var bankTx = tools["list_bank_account_transactions"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[] { "filterBy", "includeFeedMatched", "startDate", "endDate", "reconciled" })
+            Assert.True(bankTx.TryGetProperty(field, out _), field);
 
         var logs = string.Join("\n", stderr);
         Assert.Contains("restConfigured=True", logs, StringComparison.Ordinal);
