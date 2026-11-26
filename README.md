@@ -99,7 +99,7 @@ The destination nominal id is resolved from `toBankAccountId` / `toBankAccountCo
 
 ### `allocate_bank_payment_to_receipts`
 
-Add-only. Validates before writing: allocations must sum exactly to `totalAmount` (to the penny), receipt numbers must be unique, each receipt must exist, and no allocation may exceed that receipt's outstanding balance (`net + VAT - amountPaid`). Then calls `InsertReceiptPayment` once per allocation. If a later insert fails, earlier successes are left in place and listed so they can be undone with `delete_receipt_payment`.
+Add-only. Validates before writing: allocations must sum exactly to `totalAmount` (to the penny), receipt numbers must be unique, each receipt must exist, and no allocation may exceed that receipt's outstanding balance (`net + VAT - amountPaid`). Then calls `InsertReceiptPayment` once per allocation. **Each insert creates its own bank-feed line** — this is not KashFlow UI “New batch payment” (one bank debit for many receipts). SOAP has no multi-receipt single-bank-line operation; see [docs/multi-receipt-bank-payment.md](docs/multi-receipt-bank-payment.md). If a later insert fails, earlier successes are left in place and listed so they can be undone with `delete_receipt_payment`.
 
 | Parameter | Required | Meaning |
 | --- | --- | --- |

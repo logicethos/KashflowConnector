@@ -165,7 +165,7 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
         });
     }
 
-    [McpServerTool(Name = "allocate_bank_payment_to_receipts"), Description("Split one bank payment across several purchase receipts. Validates that allocations sum exactly to totalAmount, receipt numbers are unique, each receipt exists, and no allocation exceeds that receipt's outstanding balance, then calls InsertReceiptPayment once per allocation. Add-only: never updates or deletes existing payments. Requires KashFlow__ReadOnly=false. If a later insert fails, earlier successes are left in place and returned so they can be undone with delete_receipt_payment.")]
+    [McpServerTool(Name = "allocate_bank_payment_to_receipts"), Description("Split one bank amount across several purchase receipts by calling InsertReceiptPayment once per allocation. Each insert creates its own bank-feed line (not KashFlow UI New batch payment / one debit for many receipts — SOAP cannot do that). Validates that allocations sum exactly to totalAmount, receipt numbers are unique, each receipt exists, and no allocation exceeds that receipt's outstanding balance. Add-only: never updates or deletes existing payments. Requires KashFlow__ReadOnly=false. If a later insert fails, earlier successes are left in place and returned so they can be undone with delete_receipt_payment.")]
     public async Task<string> AllocateBankPaymentToReceipts(
         [Description("Payment date (ISO-8601) stored on every InsertReceiptPayment.")] DateTime paymentDate,
         [Description("Bank amount being allocated. Must equal the sum of allocations to the penny.")] decimal totalAmount,
