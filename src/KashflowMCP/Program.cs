@@ -3,8 +3,10 @@
 //
 // Credentials are optional at startup so hosts can call tools/list before setup.
 // KashFlow__UserName and KashFlow__Password are the SOAP API username and password.
+// KashFlow__RestPassword / KASHFLOW_REST_PASSWORD = web login password for REST sessiontoken.
+// Optional KashFlow__RestUserName defaults to SOAP UserName.
 // KashFlow__MemorableWord (or KASHFLOW_MEMORABLE_WORD) enables REST tools (KfToken session).
-// KashFlow__ReadOnly defaults to true. Password and memorable word are never logged.
+// KashFlow__ReadOnly defaults to true. Passwords and memorable word are never logged.
 
 using KashflowMCP;
 using KashflowMCP.Tools;

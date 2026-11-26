@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using KashflowMCP.Rest;
 using KashflowMCP.Tools;
+using ModelContextProtocol;
 using Xunit;
 
 namespace KashflowMCP.Tests;
@@ -78,6 +79,99 @@ public class KashFlowRestClientTests
         // Second call should not hit the network again.
         await client.EnsureSessionAsync();
         Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task EnsureSession_surfaces_kashflow_login_error_as_mcp_exception_without_secrets()
+    {
+        var handler = new ScriptedHandler(
+        [
+            (req, body) =>
+            {
+                Assert.Equal(HttpMethod.Post, req.Method);
+                Assert.Contains("\"UserName\":\"user\"", body, StringComparison.Ordinal);
+                Assert.Contains($"\"Password\":\"{Password}\"", body, StringComparison.Ordinal);
+                return Json(HttpStatusCode.Unauthorized, """
+                    {"Error":"InvalidCredentials","Message":"Invalid username or password"}
+                    """);
+            },
+        ]);
+
+        using var client = new KashFlowRestClient("user", Password, Memorable, handler);
+        var error = await Assert.ThrowsAsync<KashFlowRestException>(() => client.EnsureSessionAsync());
+
+        Assert.IsAssignableFrom<McpException>(error);
+        Assert.Equal(401, error.StatusCode);
+        Assert.Contains("Invalid username or password", error.Message, StringComparison.Ordinal);
+        Assert.Contains("POST /v2/sessiontoken", error.Message, StringComparison.Ordinal);
+        Assert.Contains("KashFlow__RestPassword", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Password, error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Memorable, error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Password, error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnrichLoginFailure_keeps_kashflow_text_and_omits_secrets()
+    {
+        var enriched = KashFlowRestClient.EnrichLoginFailure(
+            new KashFlowRestException("Invalid username or password", 401),
+            stage: "POST /v2/sessiontoken");
+
+        Assert.Contains("Invalid username or password", enriched.Message, StringComparison.Ordinal);
+        Assert.Contains("KASHFLOW_REST_PASSWORD", enriched.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Password, enriched.Message, StringComparison.Ordinal);
+        Assert.Equal(401, enriched.StatusCode);
+    }
+
+    [Fact]
+    public void EnrichLoginFailure_strips_format_prefix_without_duplicating()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.Unauthorized) { ReasonPhrase = "Unauthorized" };
+        var enriched = KashFlowRestClient.EnrichLoginFailure(
+            KashFlowRestClient.FormatRestFailure(
+                response,
+                """{"Error":"InvalidCredentials","Message":"Invalid username or password"}"""),
+            stage: "POST /v2/sessiontoken");
+
+        Assert.Contains("Invalid username or password", enriched.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("KashFlow REST error HTTP", enriched.Message, StringComparison.Ordinal);
+        Assert.Contains("POST /v2/sessiontoken failed HTTP 401", enriched.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ListPurchaseFiles_surfaces_kashflow_api_message_as_mcp_exception()
+    {
+        var handler = new ScriptedHandler(
+        [
+            (_, _) => Json(HttpStatusCode.OK, """
+                {"TemporaryToken":"temp-1","MemorableWordList":[{"Position":1,"Value":""}]}
+                """),
+            (_, _) => Json(HttpStatusCode.OK, """{"SessionToken":"sess-1"}"""),
+            (req, _) =>
+            {
+                Assert.Equal(HttpMethod.Get, req.Method);
+                Assert.EndsWith("/purchases/4200/files", req.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+                return Json(HttpStatusCode.Forbidden, """
+                    {
+                      "Error":"NotAuthorised",
+                      "Message":"The url specified is not authorised. User Dropbox account is not setup."
+                    }
+                    """);
+            },
+        ]);
+
+        using var client = new KashFlowRestClient("user", Password, Memorable, handler);
+        var error = await Assert.ThrowsAsync<KashFlowRestException>(() => client.ListPurchaseFilesAsync(4200));
+
+        Assert.IsAssignableFrom<McpException>(error);
+        Assert.Equal(403, error.StatusCode);
+        Assert.Contains(
+            "The url specified is not authorised. User Dropbox account is not setup.",
+            error.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("KashFlow REST error HTTP 403", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Password, error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Memorable, error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -175,6 +269,263 @@ public class KashFlowRestClientTests
         Assert.Equal(6, handler.CallCount);
     }
 
+    [Fact]
+    public async Task PutBankTransactionList_sends_assign_to_purchases()
+    {
+        var handler = SessionThen((req, body) =>
+        {
+            Assert.Equal(HttpMethod.Put, req.Method);
+            Assert.EndsWith("/bankaccounts/99/transactionlist", req.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+            Assert.Contains("\"AssignToPurchases\"", body, StringComparison.Ordinal);
+            Assert.Contains("\"TransactionId\":501", body, StringComparison.Ordinal);
+            Assert.Contains("\"Number\":4200", body, StringComparison.Ordinal);
+            Assert.Contains("\"PaymentMethod\":7", body, StringComparison.Ordinal);
+            return Json(HttpStatusCode.OK, """{"AssignToPurchases":[{"TransactionId":501,"Number":4200,"PaymentMethod":7}]}""");
+        });
+
+        using var client = new KashFlowRestClient("user", Password, Memorable, handler);
+        var response = await client.PutBankTransactionListAsync(99, new BankTransactionBulkAssignRequest
+        {
+            AssignToPurchases =
+            [
+                new BankTransactionAssignToEntity { TransactionId = 501, Number = 4200, PaymentMethod = 7 },
+            ],
+        });
+
+        Assert.NotNull(response.AssignToPurchases);
+        Assert.Equal(501, response.AssignToPurchases![0].TransactionId);
+    }
+
+    [Fact]
+    public async Task PutAndDeletePurchasesBulkPayment_use_number_path()
+    {
+        var handler = new ScriptedHandler(
+        [
+            SessionChallenge(),
+            SessionToken("sess"),
+            (req, body) =>
+            {
+                Assert.Equal(HttpMethod.Put, req.Method);
+                Assert.EndsWith("/purchases/bulk/payments/24", req.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+                Assert.Contains("\"Comment\":\"fixed\"", body, StringComparison.Ordinal);
+                return Json(HttpStatusCode.OK, """
+                    {"Number":24,"Date":"2026-09-11","AccountId":99,"Method":7,"Comment":"fixed","PaymentItems":[{"ObjectNumber":4199,"Amount":2.4}]}
+                    """);
+            },
+            (req, _) =>
+            {
+                Assert.Equal(HttpMethod.Delete, req.Method);
+                Assert.EndsWith("/purchases/bulk/payments/24", req.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+                return new HttpResponseMessage(HttpStatusCode.NoContent);
+            },
+        ]);
+
+        using var client = new KashFlowRestClient("user", Password, Memorable, handler);
+        var updated = await client.PutPurchasesBulkPaymentAsync(24, new BulkPurchasePaymentRequest
+        {
+            Number = 24,
+            Date = "2026-09-11",
+            Comment = "fixed",
+            AccountId = 99,
+            Method = 7,
+            PaymentItems = [new BulkPurchasePaymentItem { ObjectNumber = 4199, Amount = 2.4m }],
+        });
+        Assert.Equal("fixed", updated.Comment);
+        await client.DeletePurchasesBulkPaymentAsync(24);
+        Assert.Equal(4, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAndPutPurchase_round_trip_payment_lines()
+    {
+        var handler = new ScriptedHandler(
+        [
+            SessionChallenge(),
+            SessionToken("sess"),
+            (req, _) =>
+            {
+                Assert.Equal(HttpMethod.Get, req.Method);
+                Assert.EndsWith("/purchases/4200", req.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+                return Json(HttpStatusCode.OK, """
+                    {
+                      "Number":4200,
+                      "IssuedDate":"2026-09-01",
+                      "DueDate":"2026-09-30",
+                      "SupplierCode":"SUP1",
+                      "Currency":{"Code":"GBP","ExchangeRate":1},
+                      "LineItems":[{"Number":1,"Description":"Widget","Quantity":1,"Rate":88.88,"VATAmount":0,"NominalCode":5000}],
+                      "PaymentLines":[{"Id":11,"Date":"2026-09-10","Amount":88.88,"AccountId":99,"Method":7,"Note":"old"}]
+                    }
+                    """);
+            },
+            (req, body) =>
+            {
+                Assert.Equal(HttpMethod.Put, req.Method);
+                Assert.Contains("\"BankTransactionId\":901", body, StringComparison.Ordinal);
+                Assert.Contains("\"SupplierCode\":\"SUP1\"", body, StringComparison.Ordinal);
+                Assert.Contains("\"LineItems\"", body, StringComparison.Ordinal);
+                return Json(HttpStatusCode.OK, """
+                    {
+                      "Number":4200,
+                      "SupplierCode":"SUP1",
+                      "PaymentLines":[{"Id":11,"Date":"2026-09-10","Amount":88.88,"AccountId":99,"Method":7,"BankTransactionId":901}]
+                    }
+                    """);
+            },
+        ]);
+
+        using var client = new KashFlowRestClient("user", Password, Memorable, handler);
+        var existing = await client.GetPurchaseAsync(4200);
+        var request = PurchasePaymentLines.BuildUpdateRequest(
+            existing,
+            [new PurchasePaymentLines.PaymentLineEdit { Id = 11, BankTransactionId = 901 }],
+            replaceAll: false);
+        Assert.Equal("SUP1", request.SupplierCode);
+        Assert.Single(request.LineItems!);
+        Assert.Equal(901, request.PaymentLines![0].BankTransactionId);
+
+        var updated = await client.PutPurchaseAsync(4200, request);
+        Assert.Equal(901, updated.PaymentLines![0].BankTransactionId);
+    }
+
+    [Fact]
+    public async Task GetBankAccountTransactions_appends_filter_query()
+    {
+        var handler = SessionThen((req, _) =>
+        {
+            Assert.Equal(HttpMethod.Get, req.Method);
+            Assert.Contains("filterby=Unallocated", req.RequestUri!.Query, StringComparison.Ordinal);
+            Assert.Contains("includefeedmatched=true", req.RequestUri.Query, StringComparison.Ordinal);
+            Assert.Contains("startdate=2026-09-01", req.RequestUri.Query, StringComparison.Ordinal);
+            return Json(HttpStatusCode.OK, """{"Data":[],"TotalRecords":0}""");
+        });
+
+        using var client = new KashFlowRestClient("user", Password, Memorable, handler);
+        var payload = await client.GetBankAccountTransactionsAsync(99, new BankTransactionListQuery
+        {
+            FilterBy = "Unallocated",
+            IncludeFeedMatched = true,
+            StartDate = new DateTime(2026, 9, 1),
+        });
+        Assert.Equal(JsonValueKind.Object, payload.ValueKind);
+    }
+
+    [Fact]
+    public async Task Reconciliations_and_files_use_expected_paths()
+    {
+        var handler = new ScriptedHandler(
+        [
+            SessionChallenge(),
+            SessionToken("sess"),
+            (req, _) =>
+            {
+                Assert.EndsWith("/bankaccounts/99/reconciliations", req.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+                return Json(HttpStatusCode.OK, """{"Data":[{"Id":1,"Status":"Done"}]}""");
+            },
+            (req, _) =>
+            {
+                Assert.EndsWith("/bankaccounts/99/reconciliations/metadata", req.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+                return Json(HttpStatusCode.OK, """{"NextReconciliationStartDate":"2026-10-01","NextReconciliationStartBalance":100.5}""");
+            },
+            (req, _) =>
+            {
+                Assert.EndsWith("/purchases/4200/files", req.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+                return Json(HttpStatusCode.OK, """[{"FileName":"invoice.pdf"}]""");
+            },
+            (req, _) =>
+            {
+                Assert.Equal(HttpMethod.Delete, req.Method);
+                Assert.EndsWith("/purchases/4200/file", req.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+                Assert.Contains("fileName=invoice.pdf", req.RequestUri.Query, StringComparison.Ordinal);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+                };
+            },
+        ]);
+
+        using var client = new KashFlowRestClient("user", Password, Memorable, handler);
+        await client.GetBankReconciliationsAsync(99);
+        var meta = await client.GetBankReconciliationMetadataAsync(99);
+        Assert.Equal("2026-10-01", meta.NextReconciliationStartDate);
+        await client.ListPurchaseFilesAsync(4200);
+        await client.DeletePurchaseFileAsync(4200, "invoice.pdf");
+        Assert.Equal(6, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task UploadAndAttachPurchaseFile_posts_multipart_then_json()
+    {
+        var handler = new ScriptedHandler(
+        [
+            SessionChallenge(),
+            SessionToken("sess"),
+            (req, _) =>
+            {
+                Assert.Equal(HttpMethod.Post, req.Method);
+                Assert.EndsWith("/files", req.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+                Assert.Contains("objectType=purchases", req.RequestUri.Query, StringComparison.Ordinal);
+                Assert.StartsWith("multipart/", req.Content!.Headers.ContentType!.MediaType!, StringComparison.Ordinal);
+                return Json(HttpStatusCode.OK, """{"FileName":"bill.pdf","Path":"/dropbox/bill.pdf"}""");
+            },
+            (req, body) =>
+            {
+                Assert.Equal(HttpMethod.Post, req.Method);
+                Assert.EndsWith("/purchases/4200/files", req.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+                Assert.Contains("bill.pdf", body, StringComparison.Ordinal);
+                return Json(HttpStatusCode.OK, """{"ok":true}""");
+            },
+        ]);
+
+        using var client = new KashFlowRestClient("user", Password, Memorable, handler);
+        var result = await client.UploadAndAttachPurchaseFileAsync(
+            4200,
+            "bill.pdf",
+            Encoding.UTF8.GetBytes("pdf-bytes"),
+            "application/pdf");
+        Assert.Equal(JsonValueKind.Object, result.ValueKind);
+        Assert.Equal(4, handler.CallCount);
+    }
+
+    [Fact]
+    public void BuildBankTransactionsUrl_encodes_filters()
+    {
+        var url = KashFlowRestClient.BuildBankTransactionsUrl(12, new BankTransactionListQuery
+        {
+            FilterBy = "Unallocated",
+            IncludeFeedMatched = false,
+            PerPage = 50,
+        });
+        Assert.Equal(
+            "bankaccounts/12/transactions?perpage=50&filterby=Unallocated&includefeedmatched=false",
+            url);
+    }
+
+    [Fact]
+    public void ValidateUpload_rejects_oversize_and_path_names()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            KashFlowRestClient.ValidateUpload("../x.pdf", [1]));
+        Assert.Throws<ArgumentException>(() =>
+            KashFlowRestClient.ValidateUpload("big.bin", new byte[KashFlowRestClient.MaxUploadBytes + 1]));
+    }
+
+    private static ScriptedHandler SessionThen(Func<HttpRequestMessage, string, HttpResponseMessage> next)
+        => new(
+        [
+            SessionChallenge(),
+            SessionToken("sess"),
+            next,
+        ]);
+
+    private static Func<HttpRequestMessage, string, HttpResponseMessage> SessionChallenge()
+        => (_, _) => Json(HttpStatusCode.OK, """
+            {"TemporaryToken":"temp-1","MemorableWordList":[{"Position":1,"Value":""}]}
+            """);
+
+    private static Func<HttpRequestMessage, string, HttpResponseMessage> SessionToken(string token)
+        => (_, _) => Json(HttpStatusCode.OK, $$"""{"SessionToken":"{{token}}"}""");
+
     private static HttpResponseMessage Json(HttpStatusCode status, string body)
         => new(status)
         {
@@ -267,5 +618,92 @@ public class PayPurchasesBulkTests
             null));
 
         Assert.Contains("exceeds outstanding", error.Message, StringComparison.Ordinal);
+    }
+}
+
+public class PurchasePaymentLinesTests
+{
+    [Fact]
+    public void BuildUpdateRequest_preserves_non_payment_fields_and_patches_by_id()
+    {
+        var existing = new PurchaseResponse
+        {
+            Number = 4200,
+            IssuedDate = "2026-09-01",
+            SupplierCode = "SUP1",
+            Currency = new RestCurrencyResponse { Code = "EUR", ExchangeRate = 1.2m },
+            LineItems =
+            [
+                new PurchaseLineItemResponse
+                {
+                    Number = 1,
+                    Description = "Widget",
+                    Quantity = 1,
+                    Rate = 10,
+                    NominalCode = 5000,
+                },
+            ],
+            PaymentLines =
+            [
+                new PurchasePaymentLineResponse
+                {
+                    Id = 11,
+                    Date = "2026-09-10",
+                    Amount = 10,
+                    AccountId = 99,
+                    Method = 7,
+                    Note = "old",
+                },
+            ],
+        };
+
+        var request = PurchasePaymentLines.BuildUpdateRequest(
+            existing,
+            [new PurchasePaymentLines.PaymentLineEdit { Id = 11, BankTransactionId = 901, Note = "linked" }],
+            replaceAll: false);
+
+        Assert.Equal("SUP1", request.SupplierCode);
+        Assert.Equal("EUR", request.Currency!.Code);
+        Assert.Equal(1.2m, request.Currency.ExchangeRate);
+        var lineItems = Assert.Single(request.LineItems!);
+        Assert.Equal("Widget", lineItems.Description);
+        var paymentLine = Assert.Single(request.PaymentLines!);
+        Assert.Equal(901, paymentLine.BankTransactionId);
+        Assert.Equal("linked", paymentLine.Note);
+
+        using var doc = JsonDocument.Parse(PurchasePaymentLines.SerializeRequestBody(request));
+        Assert.Equal(901, doc.RootElement.GetProperty("PaymentLines")[0].GetProperty("BankTransactionId").GetInt64());
+    }
+
+    [Fact]
+    public void BuildUpdateRequest_replaceAll_swaps_payment_lines()
+    {
+        var existing = new PurchaseResponse
+        {
+            Number = 1,
+            SupplierCode = "S",
+            PaymentLines =
+            [
+                new PurchasePaymentLineResponse { Id = 1, Date = "2026-01-01", Amount = 5, AccountId = 1, Method = 1 },
+            ],
+        };
+
+        var request = PurchasePaymentLines.BuildUpdateRequest(
+            existing,
+            [
+                new PurchasePaymentLines.PaymentLineEdit
+                {
+                    Date = new DateTime(2026, 2, 1),
+                    Amount = 9m,
+                    AccountId = 2,
+                    Method = 3,
+                },
+            ],
+            replaceAll: true);
+
+        var replaced = Assert.Single(request.PaymentLines!);
+        Assert.Null(replaced.Id);
+        Assert.Equal("2026-02-01", replaced.Date);
+        Assert.Equal(9m, replaced.Amount);
     }
 }

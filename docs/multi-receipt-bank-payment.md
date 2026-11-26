@@ -21,10 +21,11 @@ Tool: **`pay_purchases_bulk`** → `POST https://api.kashflow.com/v2/purchases/b
 Requires:
 
 - SOAP `KashFlow__UserName` / `KashFlow__Password`
+- REST web password `KashFlow__RestPassword` / `KASHFLOW_REST_PASSWORD` (SOAP UserName is reused; optional `RestUserName` only if needed). SOAP keeps `KashFlow__Password` — the web password fails SOAP.
 - REST `KashFlow__MemorableWord` (or `KASHFLOW_MEMORABLE_WORD`) for KfToken session auth
 - `KashFlow__ReadOnly=false` for a real write (`dryRun=true` validates without writing)
 
-Auth flow: `POST /v2/sessiontoken` → memorable-word character challenge → `PUT /v2/sessiontoken` → `Authorization: KfToken {SessionToken}` ([Authentication](https://www.kashflow.com/developers/rest-api/authentication/), [Session token](https://www.kashflow.com/developers/rest-api/sessiontoken/), [Bulk Payments](https://www.kashflow.com/developers/rest-api/bulk-payment/)).
+Auth flow: `POST /v2/sessiontoken` → memorable-word character challenge → `PUT /v2/sessiontoken` → `Authorization: KfToken {SessionToken}` ([Authentication](https://www.kashflow.com/developers/rest-api/authentication/), [Session token](https://www.kashflow.com/developers/rest-api/sessiontoken/), [Bulk Payments](https://www.kashflow.com/developers/rest-api/bulk-payment/)). REST failures (login, files, etc.) surface KashFlow’s API error text in the tool result (no secrets).
 
 Example dry-run body for the Starling case (account id and method id resolved at runtime):
 
@@ -46,8 +47,17 @@ Example dry-run body for the Starling case (account id and method id resolved at
 - Confirm memorable-word login works with the same API password as SOAP.
 - Confirm one `purchases/bulk/payments` POST yields a single bank-feed debit equal to the sum (and how `BankTransactionId` appears on payment lines).
 - Cross-supplier batches (UI help says “same supplier”; REST docs do not clearly forbid mixed suppliers).
-- Rollback / DELETE of a bulk payment vs `DeleteReceiptPayment`.
+- Rollback via `delete_purchases_bulk_payment` vs SOAP `DeleteReceiptPayment`.
 
-## Proposed follow-up REST-only functions (research only — not built)
+## Related REST tools (built)
 
-See the PR description / final report for the full list (bank transaction assign, bulk payment PUT, purchase files, reconciliations, FX settle, etc.).
+| Tool | Endpoint |
+| --- | --- |
+| `link_bank_transactions_to_purchases` | `PUT /v2/bankaccounts/{id}/transactionlist` |
+| `update_purchases_bulk_payment` / `delete_purchases_bulk_payment` | `PUT` / `DELETE /v2/purchases/bulk/payments/{number}` |
+| `update_purchase_payment_lines` | `GET`+`PUT /v2/purchases/{number}` (`PaymentLines`, optional `BankTransactionId`) |
+| `attach_purchase_file` / `list_purchase_files` / `delete_purchase_file` | `/files` + `/purchases/{number}/files` |
+| `list_bank_reconciliations` (+ metadata / one) | `/bankaccounts/{id}/reconciliations…` |
+| `list_bank_account_transactions` | `GET …/transactions` (`filterBy=Unallocated`, `includeFeedMatched`, …) |
+
+**Not in REST:** UI Settle / FX gain-loss (no swagger settle endpoint). Use the UI or SOAP `insert_fx_receipt_payment`.

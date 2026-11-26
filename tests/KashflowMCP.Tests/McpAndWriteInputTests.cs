@@ -182,6 +182,41 @@ public class KashFlowSessionTests
 
         Assert.True(session.CredentialsConfigured);
         Assert.True(session.RestConfigured);
+        Assert.Equal("soap-user", session.RestUserNameForTests);
+        Assert.NotNull(session.RestClient);
+    }
+
+    [Fact]
+    public void Rest_credentials_override_soap_when_set()
+    {
+        using var session = KashFlowSession.FromConfiguration(Config(new Dictionary<string, string?>
+        {
+            ["KashFlow:UserName"] = "soap-user",
+            ["KashFlow:Password"] = Sentinel,
+            ["KashFlow:RestUserName"] = "web-user",
+            ["KashFlow:RestPassword"] = "web-password-secret",
+            ["KashFlow:MemorableWord"] = "pineapple",
+        }));
+
+        Assert.True(session.RestConfigured);
+        Assert.Equal("web-user", session.RestUserNameForTests);
+        Assert.NotNull(session.RestClient);
+        Assert.DoesNotContain("web-password-secret", session.ToString() ?? "", StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Bare_KASHFLOW_REST_env_overrides_soap_credentials()
+    {
+        using var session = KashFlowSession.FromConfiguration(Config(new Dictionary<string, string?>
+        {
+            ["KashFlow:UserName"] = "soap-user",
+            ["KashFlow:Password"] = Sentinel,
+            ["KASHFLOW_REST_USERNAME"] = "env-web-user",
+            ["KASHFLOW_REST_PASSWORD"] = "env-web-password",
+            ["KASHFLOW_MEMORABLE_WORD"] = "pineapple",
+        }));
+
+        Assert.Equal("env-web-user", session.RestUserNameForTests);
         Assert.NotNull(session.RestClient);
     }
 
@@ -237,6 +272,9 @@ public class PluginManifestTests
         Assert.True(properties.TryGetProperty("KASHFLOW_USERNAME", out _));
         Assert.True(properties.TryGetProperty("KASHFLOW_PASSWORD", out var password));
         Assert.Contains("password", password.GetProperty("title").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.True(properties.TryGetProperty("KASHFLOW_REST_USERNAME", out _));
+        Assert.True(properties.TryGetProperty("KASHFLOW_REST_PASSWORD", out var restPassword));
+        Assert.Contains("secret", restPassword.GetProperty("title").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.True(properties.TryGetProperty("KASHFLOW_MEMORABLE_WORD", out var memorable));
         Assert.Contains("secret", memorable.GetProperty("title").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.True(properties.TryGetProperty("KASHFLOW_READ_ONLY", out var readOnly));
@@ -250,6 +288,8 @@ public class PluginManifestTests
         var env = server.GetProperty("env");
         Assert.Equal("${KASHFLOW_USERNAME}", env.GetProperty("KashFlow__UserName").GetString());
         Assert.Equal("${KASHFLOW_PASSWORD}", env.GetProperty("KashFlow__Password").GetString());
+        Assert.Equal("${KASHFLOW_REST_USERNAME}", env.GetProperty("KashFlow__RestUserName").GetString());
+        Assert.Equal("${KASHFLOW_REST_PASSWORD}", env.GetProperty("KashFlow__RestPassword").GetString());
         Assert.Equal("${KASHFLOW_MEMORABLE_WORD}", env.GetProperty("KashFlow__MemorableWord").GetString());
         Assert.Equal("${KASHFLOW_READ_ONLY}", env.GetProperty("KashFlow__ReadOnly").GetString());
 
@@ -481,7 +521,25 @@ public class McpToolsListTests
         }, stderr);
 
         var tools = (await withRest.ListToolsAsync()).ToDictionary(tool => tool.Name, StringComparer.Ordinal);
-        Assert.Contains("pay_purchases_bulk", tools.Keys);
+        foreach (var name in new[]
+                 {
+                     "pay_purchases_bulk",
+                     "link_bank_transactions_to_purchases",
+                     "get_purchases_bulk_payment",
+                     "update_purchases_bulk_payment",
+                     "delete_purchases_bulk_payment",
+                     "update_purchase_payment_lines",
+                     "list_purchase_files",
+                     "attach_purchase_file",
+                     "delete_purchase_file",
+                     "list_bank_reconciliations",
+                     "get_bank_reconciliation_metadata",
+                     "get_bank_reconciliation",
+                     "list_bank_account_transactions",
+                     "list_bank_feed_transactions",
+                 })
+            Assert.Contains(name, tools.Keys);
+
         var schema = tools["pay_purchases_bulk"].JsonSchema.GetProperty("properties");
         foreach (var field in new[]
                  {
@@ -489,6 +547,22 @@ public class McpToolsListTests
                      "paymentMethodId", "paymentMethodName", "note", "dryRun",
                  })
             Assert.True(schema.TryGetProperty(field, out _), field);
+
+        var link = tools["link_bank_transactions_to_purchases"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[] { "assignments", "bankAccountId", "bankAccountCode", "paymentMethodId", "dryRun" })
+            Assert.True(link.TryGetProperty(field, out _), field);
+
+        var paymentLines = tools["update_purchase_payment_lines"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[] { "receiptNumber", "paymentLines", "replaceAll", "dryRun" })
+            Assert.True(paymentLines.TryGetProperty(field, out _), field);
+
+        var attach = tools["attach_purchase_file"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[] { "receiptNumber", "filePath", "contentBase64", "fileName", "dryRun" })
+            Assert.True(attach.TryGetProperty(field, out _), field);
+
+        var bankTx = tools["list_bank_account_transactions"].JsonSchema.GetProperty("properties");
+        foreach (var field in new[] { "filterBy", "includeFeedMatched", "startDate", "endDate", "reconciled" })
+            Assert.True(bankTx.TryGetProperty(field, out _), field);
 
         var logs = string.Join("\n", stderr);
         Assert.Contains("restConfigured=True", logs, StringComparison.Ordinal);
