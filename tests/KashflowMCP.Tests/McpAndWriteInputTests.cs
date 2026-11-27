@@ -264,7 +264,7 @@ public class PluginManifestTests
         var mcp = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "mcp.json")));
 
         Assert.Equal("kashflow", plugin.RootElement.GetProperty("name").GetString());
-        Assert.Equal("1.1.0", plugin.RootElement.GetProperty("version").GetString());
+        Assert.Equal("1.1.1", plugin.RootElement.GetProperty("version").GetString());
         Assert.Equal("assets/logo.svg", plugin.RootElement.GetProperty("logo").GetString());
         Assert.False(plugin.RootElement.GetProperty("logo").GetString()!.Contains("..", StringComparison.Ordinal));
 

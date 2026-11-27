@@ -1,6 +1,6 @@
 {
   "name": "kashflow",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Read and optionally write IRIS KashFlow accounting data (customers, suppliers, invoices, receipts, journals, nominals, and bank) through the SOAP API, plus optional REST bulk purchase payments.",
   "author": {
     "name": "Logic Ethos Ltd"

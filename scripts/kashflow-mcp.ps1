@@ -13,7 +13,7 @@ function Die([string]$Message) {
     exit 1
 }
 
-$Version = if ($env:KASHFLOW_MCP_VERSION) { $env:KASHFLOW_MCP_VERSION } else { '1.1.0' }
+$Version = if ($env:KASHFLOW_MCP_VERSION) { $env:KASHFLOW_MCP_VERSION } else { '1.1.1' }
 $Repo = if ($env:KASHFLOW_MCP_REPO) { $env:KASHFLOW_MCP_REPO } else { 'logicethos/KashflowConnector' }
 
 function Get-Rid {

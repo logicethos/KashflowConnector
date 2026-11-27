@@ -14,7 +14,7 @@ Authentication for SOAP tools is the **SOAP API username and password**. Optiona
    - **KashFlow REST web password** (`KASHFLOW_REST_PASSWORD`) — web login password for REST `sessiontoken` (often differs from the SOAP API password). Treated as a secret; never logged. Falls back to `KASHFLOW_PASSWORD` when empty.
    - **KashFlow REST memorable word** (`KASHFLOW_MEMORABLE_WORD`) — optional. Enables REST tools (`pay_purchases_bulk`, bank-feed link, purchase files, reconciliations, …). Treated as a secret; never logged.
    - **Read only** (`KASHFLOW_READ_ONLY`) — defaults to **true**.
- 3. Cursor starts `scripts/kashflow-mcp`. That launcher picks the matching self-contained binary from this repository’s GitHub Releases (`v1.1.0`), checks `SHA256SUMS`, caches it under `~/.cache/kashflow-mcp` (or `%LOCALAPPDATA%\kashflow-mcp` on Windows), and execs it. An end user does not need the .NET SDK. The first launch needs network access to `github.com`.
+ 3. Cursor starts `scripts/kashflow-mcp`. That launcher picks the matching self-contained binary from this repository’s GitHub Releases (`v1.1.1`), checks `SHA256SUMS`, caches it under `~/.cache/kashflow-mcp` (or `%LOCALAPPDATA%\kashflow-mcp` on Windows), and execs it. An end user does not need the .NET SDK. The first launch needs network access to `github.com`.
 
 `tools/list` succeeds before those values are saved. The first tool call that talks to KashFlow reports a clear error until the SOAP username and password are set. REST tools appear in `tools/list` only when the memorable word is configured. REST failures (login and endpoints such as purchase files) include KashFlow’s error text (for example `Invalid username or password`, or Dropbox/file authorisation messages) — no secrets.
 
@@ -312,7 +312,7 @@ dotnet test KashflowConnector.slnx -c Release --no-build
 
 ## Publish release binaries
 
-Tag `v1.1.0` (the version in `.cursor-plugin/plugin.json`) and push it. `.github/workflows/release.yml` builds, tests, and uploads:
+Tag `v1.1.1` (the version in `.cursor-plugin/plugin.json`) and push it. `.github/workflows/release.yml` builds, tests, and uploads:
 
 - `KashflowMCP-<rid>.zip` for `linux-x64`, `linux-arm64`, `win-x64`, `win-arm64`, `osx-x64`, `osx-arm64`
 - `SHA256SUMS`
