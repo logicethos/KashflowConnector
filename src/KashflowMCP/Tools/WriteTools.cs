@@ -44,16 +44,35 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
         return JsonResults.Serialize(new { invoiceId = id });
     }
 
-    [McpServerTool(Name = "insert_receipt2"), Description("Insert a purchase receipt (Receipt2). Requires KashFlow__ReadOnly=false. Pass structured receipt fields (supplier and lines), or receiptJson with a full Receipt2 payload. When receiptJson is set, the structured fields are ignored.")]
+    [McpServerTool(Name = "insert_receipt2"), Description("Insert a purchase receipt (Receipt2). Requires KashFlow__ReadOnly=false unless dryRun=true. Line rate, VAT, and net/VAT totals are in the document currency (currencyCode). KashFlow SOAP line amounts are GBP, so foreign lines are divided by exchangeRate before the call. exchangeRate is foreign currency units per 1 GBP (USD 1.3123, not 0.7620) and is required when currencyCode is not GBP. Header NetAmount and VATAmount stay in the document currency. rateConvention must be ForeignPerGbp when set. dryRun returns the foreign amounts, the GBP line amounts, and the rate without calling KashFlow. Pass structured receipt fields, or receiptJson with a Receipt2 payload in document currency. When receiptJson is set, the structured fields are ignored.")]
     public async Task<string> InsertReceipt2(
-        [Description("Structured receipt. Ignored when receiptJson is set.")] InsertReceiptInput? receipt = null,
-        [Description("Legacy full Receipt2 JSON string. When set, this is used instead of the structured receipt.")] string? receiptJson = null,
+        [Description("Structured receipt in document currency. Ignored when receiptJson is set.")] InsertReceiptInput? receipt = null,
+        [Description("Receipt2 JSON in document currency (line rate and VAT are the foreign figures, not GBP). When set, the structured receipt is ignored. Foreign lines are still converted to GBP before SOAP.")] string? receiptJson = null,
+        [Description("When true, validate and return foreign amounts, GBP line amounts, and the exchange rate without calling KashFlow. Default false. Allowed while read-only.")] bool dryRun = false,
         CancellationToken cancellationToken = default)
     {
-        ToolGuard.EnsureWritable(runtime);
+        if (!dryRun)
+            ToolGuard.EnsureWritable(runtime);
         var mapped = WriteInputMapper.ResolveReceipt(receipt, receiptJson);
+        var convention = string.IsNullOrWhiteSpace(receiptJson) ? receipt?.RateConvention : null;
+        var soap = ReceiptCurrency.ToSoap(mapped, convention);
+        var currency = ReceiptCurrency.Describe(mapped, soap);
+        if (dryRun)
+        {
+            return JsonResults.Serialize(new
+            {
+                dryRun = true,
+                currency,
+            });
+        }
+
         var id = await session.Client.InsertReceipt2Async(mapped, cancellationToken);
-        return JsonResults.Serialize(new { receiptId = id });
+        return JsonResults.Serialize(new
+        {
+            dryRun = false,
+            receiptId = id,
+            currency,
+        });
     }
 
     [McpServerTool(Name = "insert_journal"), Description("Insert a journal. Requires KashFlow__ReadOnly=false. Pass structured journal fields (date and balancing lines), or journalJson with a full JournalEntry payload. When journalJson is set, the structured fields are ignored.")]

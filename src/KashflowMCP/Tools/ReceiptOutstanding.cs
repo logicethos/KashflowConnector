@@ -8,7 +8,8 @@ public static class ReceiptOutstanding
     /// <summary>
     /// GBP book value of a purchase receipt. SOAP payment lines are in home currency (GBP).
     /// For FX receipts, KashFlow stores <see cref="Receipt2.ExchangeRate"/> as foreign units per GBP,
-    /// so book value is <c>(net + VAT) / ExchangeRate</c>. When ExchangeRate is unset (0), net+VAT
+    /// so book value is <c>(net + VAT) / ExchangeRate</c>. Writes keep header net and VAT in the
+    /// document currency and send line rates in GBP. When ExchangeRate is unset (0), net+VAT
     /// is treated as already in GBP.
     /// </summary>
     public static decimal BookValueGbp(Receipt2 receipt)

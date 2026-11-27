@@ -93,23 +93,31 @@ public static class PurchasePaymentLines
                     Code = existing.Currency.Code,
                     ExchangeRate = existing.Currency.ExchangeRate,
                 },
+            HomeCurrencyGrossAmount = existing.HomeCurrencyGrossAmount,
             LineItems = (existing.LineItems ?? [])
-                .Select(line => new PurchaseLineItemRequest
+                .Select(line =>
                 {
-                    Number = line.Number,
-                    Description = line.Description,
-                    Quantity = line.Quantity,
-                    Rate = line.Rate,
-                    VATLevel = line.VATLevel,
-                    VATExempt = line.VATExempt,
-                    VATAmount = line.VATAmount,
-                    NominalCode = line.NominalCode,
-                    NominalName = line.NominalName,
-                    ProductCode = line.ProductCode,
-                    TaxCode = line.TaxCode,
-                    Disallowed = line.Disallowed,
-                    ProjectNumber = line.ProjectNumber,
-                    ImportDuty = line.ImportDuty,
+                    var requestLine = new PurchaseLineItemRequest
+                    {
+                        Number = line.Number,
+                        Description = line.Description,
+                        Quantity = line.Quantity,
+                        Rate = line.Rate,
+                        HomeCurrencyRate = line.HomeCurrencyRate,
+                        VATLevel = line.VATLevel,
+                        VATExempt = line.VATExempt,
+                        VATAmount = line.VATAmount,
+                        HomeCurrencyVATAmount = line.HomeCurrencyVATAmount,
+                        NominalCode = line.NominalCode,
+                        NominalName = line.NominalName,
+                        ProductCode = line.ProductCode,
+                        TaxCode = line.TaxCode,
+                        Disallowed = line.Disallowed,
+                        ProjectNumber = line.ProjectNumber,
+                        ImportDuty = line.ImportDuty,
+                    };
+                    FillHomeCurrency(requestLine, existing.Currency);
+                    return requestLine;
                 })
                 .ToList(),
             PaymentLines = (existing.PaymentLines ?? []).Select(ToRequestLine).ToList(),
@@ -118,6 +126,30 @@ public static class PurchasePaymentLines
             IsCISReverseCharge = existing.IsCISReverseCharge,
             Type = existing.Type,
         };
+    }
+
+    /// <summary>
+    /// REST line <c>Rate</c> is quote currency and <c>HomeCurrencyRate</c> is GBP.
+    /// A payment-line PUT must send the home rate or KashFlow can lose the sterling amount.
+    /// An existing home rate is kept. A missing one is quote / exchange rate (foreign units per £1).
+    /// </summary>
+    private static void FillHomeCurrency(PurchaseLineItemRequest line, RestCurrencyResponse? currency)
+    {
+        var code = currency?.Code;
+        var foreign = !string.IsNullOrWhiteSpace(code)
+            && !code.Trim().Equals("GBP", StringComparison.OrdinalIgnoreCase);
+        var rate = currency?.ExchangeRate;
+        if (!foreign || rate is null or <= 0m)
+        {
+            line.HomeCurrencyRate ??= line.Rate;
+            line.HomeCurrencyVATAmount ??= line.VATAmount;
+            return;
+        }
+
+        if (line.HomeCurrencyRate is null && line.Rate is decimal quoteRate)
+            line.HomeCurrencyRate = decimal.Round(quoteRate / rate.Value, 2, MidpointRounding.AwayFromZero);
+        if (line.HomeCurrencyVATAmount is null && line.VATAmount is decimal quoteVat)
+            line.HomeCurrencyVATAmount = decimal.Round(quoteVat / rate.Value, 2, MidpointRounding.AwayFromZero);
     }
 
     private static PurchasePaymentLineRequest ToRequestLine(PurchasePaymentLineResponse line)

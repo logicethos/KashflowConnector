@@ -184,7 +184,7 @@ public sealed class InsertDocumentLineInput
     [Description("Line description.")]
     public string? Description { get; set; }
 
-    [Description("Unit net rate in the document currency.")]
+    [Description("Unit net rate in the document currency. Purchase receipts convert this to GBP before SOAP (foreign amount / exchangeRate). Sales invoices are sent as entered.")]
     public decimal Rate { get; set; }
 
     [Description("Nominal code (charge type) for this line.")]
@@ -193,7 +193,7 @@ public sealed class InsertDocumentLineInput
     [Description("VAT rate percent, for example 20. Omit vatAmount to compute quantity * rate * vatRate / 100.")]
     public decimal VatRate { get; set; }
 
-    [Description("VAT amount. When omitted, quantity * rate * vatRate / 100 is used.")]
+    [Description("VAT amount in the document currency. When omitted, quantity * rate * vatRate / 100 is used. Purchase receipts convert it to GBP with the same exchange rate as the net.")]
     public decimal? VatAmount { get; set; }
 
     [Description("Optional product ID.")]
@@ -256,19 +256,22 @@ public sealed class InsertReceiptInput
     [Description("Due date (ISO-8601).")]
     public DateTime? DueDate { get; set; }
 
-    [Description("Currency code, for example GBP.")]
+    [Description("Document currency code, for example GBP or USD. Line rates are in this currency. Blank means GBP.")]
     public string? CurrencyCode { get; set; }
 
     [Description("Supplier reference.")]
     public string? SupplierReference { get; set; }
 
-    [Description("Exchange rate. Leave unset for the account default.")]
+    [Description("Foreign currency units per 1 GBP. Required when currencyCode is not GBP. Example: 1.3123 means £1 = $1.3123, so a $192 line is booked as £146.31. Do not pass the reciprocal (GBP per 1 foreign unit, such as 0.7620). Omit or pass 1 for GBP.")]
     public decimal? ExchangeRate { get; set; }
 
-    [Description("Net total. When omitted, the sum of quantity * rate across lines is used.")]
+    [Description("Exchange-rate convention. Only ForeignPerGbp is accepted. GbpPerForeign is rejected. Omit to use ForeignPerGbp.")]
+    public string? RateConvention { get; set; }
+
+    [Description("Document-currency net total. When omitted, the sum of quantity * rate across lines is used. This stays in the document currency on the KashFlow header. It must match the lines.")]
     public decimal? NetAmount { get; set; }
 
-    [Description("VAT total. When omitted, the sum of line VAT amounts is used.")]
+    [Description("Document-currency VAT total. When omitted, the sum of line VAT amounts is used. This stays in the document currency on the KashFlow header.")]
     public decimal? VatAmount { get; set; }
 
     [Description("Receipt lines. At least one is required when receiptJson is omitted.")]
