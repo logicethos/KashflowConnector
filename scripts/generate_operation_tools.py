@@ -184,10 +184,42 @@ def sibling_operation(operation: str, operations: set[str]) -> str | None:
     return None
 
 
+DOCUMENT_RECEIPT_OPS = {
+    "InsertReceipt",
+    "UpdateReceipt",
+    "UpdateReceiptHeader",
+    "UpdateReceipt2",
+}
+
+LINE_RECEIPT_OPS = {
+    "InsertReceiptLine",
+    "InsertReceiptLineFromNumber",
+    "InsertReceiptLine2",
+    "InsertReceiptLineFromNumber2",
+}
+
+DOCUMENT_CURRENCY_NOTE = (
+    ". Line Rate and VatAmount are document currency. KashFlow stores SOAP receipt line amounts in GBP, "
+    "so foreign lines are divided by ExchangeRate (foreign currency units per 1 GBP) before the call. "
+    "ExchangeRate is required when CurrencyCode is not GBP. Header NetAmount and VATAmount stay in the document currency."
+)
+
+LINE_CURRENCY_NOTE = (
+    ". Rate and VatAmount are GBP (KashFlow home currency) unless currencyCode is not GBP, "
+    "in which case they are document currency and exchangeRate (foreign units per 1 GBP) is required."
+)
+
+
 def render_method(method: dict, read: bool) -> str:
     description = method["summary"]
     if not read:
         description = "Requires KashFlow__ReadOnly=false. " + description
+    operation = method["operation"]
+    if operation in DOCUMENT_RECEIPT_OPS:
+        description += DOCUMENT_CURRENCY_NOTE
+    if operation in LINE_RECEIPT_OPS:
+        description += LINE_CURRENCY_NOTE
+    line_name = None
     parameters = []
     call_args = []
     for type_name, name in method["parameters"]:
@@ -196,10 +228,23 @@ def render_method(method: dict, read: bool) -> str:
             hint += " PayInvoice is the document number, PayMethod the method id, PayAccount the bank account id, PayAmount the amount."
         if type_name == "BankTransaction":
             hint += " accid is the bank account id, moneyin and moneyout are the amounts, transactionType comes from get_bank_tx_types."
+        if operation in LINE_RECEIPT_OPS and type_name in {"ReceiptLine2", "InvoiceLine"}:
+            hint += " GBP unless currencyCode is a foreign code."
+            line_name = name
         parameters.append(
             f'        [Description("{csharp_string(hint)}")] {type_name} {name}'
         )
-        call_args.append(name)
+        call_args.append("soapLine" if name == line_name else name)
+    if line_name:
+        parameters.append(
+            '        [Description("Document currency. Omit or pass GBP when the line amounts are already GBP. When this is not GBP, Rate and VatAmount are document currency.")] string? currencyCode = null'
+        )
+        parameters.append(
+            '        [Description("Foreign currency units per 1 GBP. Required when currencyCode is not GBP. Example: 1.3123 for USD. Do not pass GBP per foreign unit.")] decimal? exchangeRate = null'
+        )
+        parameters.append(
+            '        [Description("Must be ForeignPerGbp when set. GbpPerForeign is rejected.")] string? rateConvention = null'
+        )
     call_args.append("cancellationToken")
     signature = ",\n".join(parameters)
     if signature:
@@ -212,11 +257,16 @@ def render_method(method: dict, read: bool) -> str:
     else:
         body = f"        return JsonResults.Serialize(await {body_call});"
     guard = "" if read else "        ToolGuard.EnsureWritable(runtime);\n"
+    convert = ""
+    if line_name:
+        convert = (
+            f"        var soapLine = ReceiptCurrency.ToSoapLine({line_name}, currencyCode, exchangeRate, rateConvention);\n"
+        )
     return f"""    [McpServerTool(Name = "{method["tool"]}"), Description("{csharp_string(description)}")]
     public async Task<string> {method["operation"]}(
 {signature})
     {{
-{guard}{body}
+{guard}{convert}{body}
     }}
 """
 
@@ -247,8 +297,14 @@ def main() -> None:
                 f'{method["operation"]}: legacy TypeDefined duplicate of {sibling}'
             )
             continue
-        # transfer_between_bank_accounts calls these. They stay as their own tools.
-        if full in wrapped and full not in {"InsertBankTransactionAsync", "DeleteBankTransactionAsync"}:
+        # Some writes are also called from hand-written tools (rollback, transfers).
+        # They still need their own MCP tool.
+        if full in wrapped and full not in {
+            "InsertBankTransactionAsync",
+            "DeleteBankTransactionAsync",
+            "DeleteReceiptAsync",
+            "DeleteReceiptPaymentAsync",
+        }:
             skipped.append(f'{method["operation"]}: already wrapped by a hand-written tool')
             continue
         tool = snake(method["operation"])

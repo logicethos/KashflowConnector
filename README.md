@@ -29,6 +29,20 @@ Authentication for SOAP tools is the **SOAP API username and password**. Optiona
 
 Each write tool takes a structured object with documented fields (name, addresses, lines, nominals, and so on). You can still pass the previous full SOAP JSON string (`customerJson`, `supplierJson`, `invoiceJson`, `receiptJson`, `journalJson`). When that string is set, it is used and the structured fields are ignored, so extra text and checkbox fields on Customer still work.
 
+## Foreign-currency purchase receipts
+
+KashFlow SOAP stores purchase-receipt **line** `Rate` and `VatAmount` in home currency (GBP). The REST purchase resource is different: `Rate` / `VATAmount` are the quote (document) currency and `HomeCurrencyRate` / `HomeCurrencyVATAmount` are GBP. On both APIs the exchange rate is **foreign currency units per 1 GBP** (a REST sample uses AUD `ExchangeRate` 2, quote rate 15, home rate 7.50). Home amount = foreign amount / rate. USD 1.3123 means £1 = $1.3123. Do not pass the reciprocal (GBP per 1 foreign unit).
+
+`insert_receipt2` keeps that contract for callers: line rate, line VAT, and header net/VAT are in the **document currency**. For a non-GBP code the server requires `exchangeRate`, divides each line net and VAT by that rate (2 decimal places, with a penny adjustment so the GBP lines sum to the converted total), and sends those GBP figures as the SOAP line amounts. Header `NetAmount` and `VATAmount` stay in the document currency, which is what `(net + VAT) / exchangeRate` reads back as the sterling book value. `rateConvention` must be `ForeignPerGbp` when it is set; `GbpPerForeign` is rejected. Rates below 1 are rejected for currencies that are normally weaker than sterling (USD, EUR, and the others listed in code) because that value is the reciprocal.
+
+`dryRun=true` on `insert_receipt2` does not call KashFlow. The result includes `currency.foreignNet`, `currency.gbpNet`, `currency.exchangeRateForeignPerGbp`, and the same split per line. Example: USD $192 at 1.3123 is booked as a line of £146.31, with header net still 192.
+
+The same conversion runs for `insert_receipt`, `update_receipt`, `update_receipt_header`, and `update_receipt2`. Line-only tools (`insert_receipt_line`, `insert_receipt_line2`, and the from-number variants) treat `Rate` and `VatAmount` as GBP unless `currencyCode` is a foreign code, in which case `exchangeRate` is required and the line is converted the same way.
+
+`update_purchase_payment_lines` copies REST `HomeCurrencyRate` and `HomeCurrencyVATAmount` onto the PUT. If a foreign purchase GET omitted them, they are filled as quote amount / exchange rate so the sterling line amount is not dropped. This server does not create purchases through REST `POST /v2/purchases`.
+
+SuperSimpleReceipts (SSReceipts) does not post through these MCP tools. `submit_purchase_invoice` only queues a PDF. Posting is `SuperSimpleReceipts.Api/Services/KashFlowClient.InsertReceiptAsync` in `logicethos/SuperSimpleReceipts`, which calls this library's `InsertReceipt2Async` with document-currency line rates and no `ExchangeRate`. After this change a non-GBP receipt without `ExchangeRate` is rejected instead of being booked at the foreign figure. That app needs to pass `ExchangeRate` as foreign units per £1 on the `Receipt2` (line rates can stay in the document currency; this library converts them).
+
 ## Purchase receipt payments
 
 These tools record money paid against a purchase receipt (a supplier bill), not a sales invoice.

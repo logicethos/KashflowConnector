@@ -127,16 +127,26 @@ public sealed class PurchaseLineItemRequest
     [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public decimal? Quantity { get; set; }
 
+    /// <summary>Quote-currency (document) unit rate.</summary>
     [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public decimal? Rate { get; set; }
+
+    /// <summary>Home-currency (GBP) unit rate. Required on foreign purchases so PUT does not drop the sterling amount.</summary>
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public decimal? HomeCurrencyRate { get; set; }
 
     [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public decimal? VATLevel { get; set; }
 
     public bool? VATExempt { get; set; }
 
+    /// <summary>Quote-currency VAT amount.</summary>
     [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public decimal? VATAmount { get; set; }
+
+    /// <summary>Home-currency (GBP) VAT amount.</summary>
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public decimal? HomeCurrencyVATAmount { get; set; }
 
     public int? NominalCode { get; set; }
     public string? NominalName { get; set; }
@@ -176,6 +186,10 @@ public sealed class PurchaseRequest
     public string? SupplierCode { get; set; }
     public string? SupplierReference { get; set; }
     public RestCurrencyRequest? Currency { get; set; }
+
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public decimal? HomeCurrencyGrossAmount { get; set; }
+
     public List<PurchaseLineItemRequest>? LineItems { get; set; }
     public List<PurchasePaymentLineRequest>? PaymentLines { get; set; }
     public int? ProjectNumber { get; set; }
@@ -216,12 +230,18 @@ public sealed class PurchaseLineItemResponse
     public decimal? Rate { get; set; }
 
     [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public decimal? HomeCurrencyRate { get; set; }
+
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public decimal? VATLevel { get; set; }
 
     public bool? VATExempt { get; set; }
 
     [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public decimal? VATAmount { get; set; }
+
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public decimal? HomeCurrencyVATAmount { get; set; }
 
     public int? NominalCode { get; set; }
     public string? NominalName { get; set; }
@@ -243,6 +263,10 @@ public sealed class PurchaseResponse
     public string? SupplierCode { get; set; }
     public string? SupplierReference { get; set; }
     public RestCurrencyResponse? Currency { get; set; }
+
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public decimal? HomeCurrencyGrossAmount { get; set; }
+
     public List<PurchaseLineItemResponse>? LineItems { get; set; }
     public List<PurchasePaymentLineResponse>? PaymentLines { get; set; }
     public int? ProjectNumber { get; set; }

@@ -880,27 +880,35 @@ public sealed class AdditionalWriteTools(KashFlowSession session, McpRuntimeOpti
         return JsonResults.Serialize(await session.Client.DeleteQuoteLineAsync(lineID, quoteNumber, cancellationToken));
     }
 
-    [McpServerTool(Name = "insert_receipt_line_from_number2"), Description("Requires KashFlow__ReadOnly=false. INSERT receipt line item with import duty (applicable to ROW Suppliers only) to comply with Postponed VAT Accounting following Brexit transition")]
+    [McpServerTool(Name = "insert_receipt_line_from_number2"), Description("Requires KashFlow__ReadOnly=false. INSERT receipt line item with import duty (applicable to ROW Suppliers only) to comply with Postponed VAT Accounting following Brexit transition. Rate and VatAmount are GBP (KashFlow home currency) unless currencyCode is not GBP, in which case they are document currency and exchangeRate (foreign units per 1 GBP) is required.")]
     public async Task<string> InsertReceiptLineFromNumber2(
         [Description("SOAP parameter receiptNumber (int).")] int receiptNumber,
-        [Description("SOAP parameter receiptLine (ReceiptLine2).")] ReceiptLine2 receiptLine,
+        [Description("SOAP parameter receiptLine (ReceiptLine2). GBP unless currencyCode is a foreign code.")] ReceiptLine2 receiptLine,
+        [Description("Document currency. Omit or pass GBP when the line amounts are already GBP. When this is not GBP, Rate and VatAmount are document currency.")] string? currencyCode = null,
+        [Description("Foreign currency units per 1 GBP. Required when currencyCode is not GBP. Example: 1.3123 for USD. Do not pass GBP per foreign unit.")] decimal? exchangeRate = null,
+        [Description("Must be ForeignPerGbp when set. GbpPerForeign is rejected.")] string? rateConvention = null,
         CancellationToken cancellationToken = default)
     {
         ToolGuard.EnsureWritable(runtime);
-        return JsonResults.Serialize(await session.Client.InsertReceiptLineFromNumber2Async(receiptNumber, receiptLine, cancellationToken));
+        var soapLine = ReceiptCurrency.ToSoapLine(receiptLine, currencyCode, exchangeRate, rateConvention);
+        return JsonResults.Serialize(await session.Client.InsertReceiptLineFromNumber2Async(receiptNumber, soapLine, cancellationToken));
     }
 
-    [McpServerTool(Name = "insert_receipt_line2"), Description("Requires KashFlow__ReadOnly=false. INSERT receipt line item with import duty (applicable to ROW Suppliers only) to comply with Postponed VAT Accounting following Brexit transition")]
+    [McpServerTool(Name = "insert_receipt_line2"), Description("Requires KashFlow__ReadOnly=false. INSERT receipt line item with import duty (applicable to ROW Suppliers only) to comply with Postponed VAT Accounting following Brexit transition. Rate and VatAmount are GBP (KashFlow home currency) unless currencyCode is not GBP, in which case they are document currency and exchangeRate (foreign units per 1 GBP) is required.")]
     public async Task<string> InsertReceiptLine2(
         [Description("SOAP parameter receiptId (int).")] int receiptId,
-        [Description("SOAP parameter receiptLine (ReceiptLine2).")] ReceiptLine2 receiptLine,
+        [Description("SOAP parameter receiptLine (ReceiptLine2). GBP unless currencyCode is a foreign code.")] ReceiptLine2 receiptLine,
+        [Description("Document currency. Omit or pass GBP when the line amounts are already GBP. When this is not GBP, Rate and VatAmount are document currency.")] string? currencyCode = null,
+        [Description("Foreign currency units per 1 GBP. Required when currencyCode is not GBP. Example: 1.3123 for USD. Do not pass GBP per foreign unit.")] decimal? exchangeRate = null,
+        [Description("Must be ForeignPerGbp when set. GbpPerForeign is rejected.")] string? rateConvention = null,
         CancellationToken cancellationToken = default)
     {
         ToolGuard.EnsureWritable(runtime);
-        return JsonResults.Serialize(await session.Client.InsertReceiptLine2Async(receiptId, receiptLine, cancellationToken));
+        var soapLine = ReceiptCurrency.ToSoapLine(receiptLine, currencyCode, exchangeRate, rateConvention);
+        return JsonResults.Serialize(await session.Client.InsertReceiptLine2Async(receiptId, soapLine, cancellationToken));
     }
 
-    [McpServerTool(Name = "update_receipt2"), Description("Requires KashFlow__ReadOnly=false. UPDATE receipt with import duty (applicable to ROW Suppliers only) to comply with Postponed VAT Accounting following Brexit transition")]
+    [McpServerTool(Name = "update_receipt2"), Description("Requires KashFlow__ReadOnly=false. UPDATE receipt with import duty (applicable to ROW Suppliers only) to comply with Postponed VAT Accounting following Brexit transition. Line Rate and VatAmount are document currency. KashFlow stores SOAP receipt line amounts in GBP, so foreign lines are divided by ExchangeRate (foreign currency units per 1 GBP) before the call. ExchangeRate is required when CurrencyCode is not GBP. Header NetAmount and VATAmount stay in the document currency.")]
     public async Task<string> UpdateReceipt2(
         [Description("SOAP parameter receipt (Receipt2).")] Receipt2 receipt,
         CancellationToken cancellationToken = default)
@@ -1091,7 +1099,7 @@ public sealed class AdditionalWriteTools(KashFlowSession session, McpRuntimeOpti
         return JsonResults.Serialize(await session.Client.DeleteReceiptLineWithReceiptIDAsync(lineID, receiptID, cancellationToken));
     }
 
-    [McpServerTool(Name = "insert_receipt"), Description("Requires KashFlow__ReadOnly=false. To INSERT receipt with import duty use InsertReciept2")]
+    [McpServerTool(Name = "insert_receipt"), Description("Requires KashFlow__ReadOnly=false. To INSERT receipt with import duty use InsertReciept2. Line Rate and VatAmount are document currency. KashFlow stores SOAP receipt line amounts in GBP, so foreign lines are divided by ExchangeRate (foreign currency units per 1 GBP) before the call. ExchangeRate is required when CurrencyCode is not GBP. Header NetAmount and VATAmount stay in the document currency.")]
     public async Task<string> InsertReceipt(
         [Description("SOAP parameter inv (Invoice).")] Invoice inv,
         CancellationToken cancellationToken = default)
@@ -1100,24 +1108,32 @@ public sealed class AdditionalWriteTools(KashFlowSession session, McpRuntimeOpti
         return JsonResults.Serialize(await session.Client.InsertReceiptAsync(inv, cancellationToken));
     }
 
-    [McpServerTool(Name = "insert_receipt_line"), Description("Requires KashFlow__ReadOnly=false. To INSERT receipt line item with import duty use InsertRecieptLine2")]
+    [McpServerTool(Name = "insert_receipt_line"), Description("Requires KashFlow__ReadOnly=false. To INSERT receipt line item with import duty use InsertRecieptLine2. Rate and VatAmount are GBP (KashFlow home currency) unless currencyCode is not GBP, in which case they are document currency and exchangeRate (foreign units per 1 GBP) is required.")]
     public async Task<string> InsertReceiptLine(
         [Description("SOAP parameter receiptID (int).")] int receiptID,
-        [Description("SOAP parameter invLine (InvoiceLine).")] InvoiceLine invLine,
+        [Description("SOAP parameter invLine (InvoiceLine). GBP unless currencyCode is a foreign code.")] InvoiceLine invLine,
+        [Description("Document currency. Omit or pass GBP when the line amounts are already GBP. When this is not GBP, Rate and VatAmount are document currency.")] string? currencyCode = null,
+        [Description("Foreign currency units per 1 GBP. Required when currencyCode is not GBP. Example: 1.3123 for USD. Do not pass GBP per foreign unit.")] decimal? exchangeRate = null,
+        [Description("Must be ForeignPerGbp when set. GbpPerForeign is rejected.")] string? rateConvention = null,
         CancellationToken cancellationToken = default)
     {
         ToolGuard.EnsureWritable(runtime);
-        return JsonResults.Serialize(await session.Client.InsertReceiptLineAsync(receiptID, invLine, cancellationToken));
+        var soapLine = ReceiptCurrency.ToSoapLine(invLine, currencyCode, exchangeRate, rateConvention);
+        return JsonResults.Serialize(await session.Client.InsertReceiptLineAsync(receiptID, soapLine, cancellationToken));
     }
 
-    [McpServerTool(Name = "insert_receipt_line_from_number"), Description("Requires KashFlow__ReadOnly=false. To INSERT receipt line item with import duty use InsertRecieptLineNumber2")]
+    [McpServerTool(Name = "insert_receipt_line_from_number"), Description("Requires KashFlow__ReadOnly=false. To INSERT receipt line item with import duty use InsertRecieptLineNumber2. Rate and VatAmount are GBP (KashFlow home currency) unless currencyCode is not GBP, in which case they are document currency and exchangeRate (foreign units per 1 GBP) is required.")]
     public async Task<string> InsertReceiptLineFromNumber(
         [Description("SOAP parameter receiptNumber (int).")] int receiptNumber,
-        [Description("SOAP parameter invLine (InvoiceLine).")] InvoiceLine invLine,
+        [Description("SOAP parameter invLine (InvoiceLine). GBP unless currencyCode is a foreign code.")] InvoiceLine invLine,
+        [Description("Document currency. Omit or pass GBP when the line amounts are already GBP. When this is not GBP, Rate and VatAmount are document currency.")] string? currencyCode = null,
+        [Description("Foreign currency units per 1 GBP. Required when currencyCode is not GBP. Example: 1.3123 for USD. Do not pass GBP per foreign unit.")] decimal? exchangeRate = null,
+        [Description("Must be ForeignPerGbp when set. GbpPerForeign is rejected.")] string? rateConvention = null,
         CancellationToken cancellationToken = default)
     {
         ToolGuard.EnsureWritable(runtime);
-        return JsonResults.Serialize(await session.Client.InsertReceiptLineFromNumberAsync(receiptNumber, invLine, cancellationToken));
+        var soapLine = ReceiptCurrency.ToSoapLine(invLine, currencyCode, exchangeRate, rateConvention);
+        return JsonResults.Serialize(await session.Client.InsertReceiptLineFromNumberAsync(receiptNumber, soapLine, cancellationToken));
     }
 
     [McpServerTool(Name = "allocate_advance_payment_to_receipt"), Description("Requires KashFlow__ReadOnly=false. Calls the KashFlow SOAP operation AllocateAdvancePaymentToReceipt.")]
@@ -1139,7 +1155,7 @@ public sealed class AdditionalWriteTools(KashFlowSession session, McpRuntimeOpti
         return JsonResults.Serialize(await session.Client.DeleteReceiptPaymentAsync(receiptPaymentNumber, cancellationToken));
     }
 
-    [McpServerTool(Name = "update_receipt"), Description("Requires KashFlow__ReadOnly=false. Update header and delete all line items and insert line items provided. To UPDATE receipt with import duty user UpdateReciept2")]
+    [McpServerTool(Name = "update_receipt"), Description("Requires KashFlow__ReadOnly=false. Update header and delete all line items and insert line items provided. To UPDATE receipt with import duty user UpdateReciept2. Line Rate and VatAmount are document currency. KashFlow stores SOAP receipt line amounts in GBP, so foreign lines are divided by ExchangeRate (foreign currency units per 1 GBP) before the call. ExchangeRate is required when CurrencyCode is not GBP. Header NetAmount and VATAmount stay in the document currency.")]
     public async Task<string> UpdateReceipt(
         [Description("SOAP parameter receipt (Invoice).")] Invoice receipt,
         CancellationToken cancellationToken = default)
@@ -1148,7 +1164,7 @@ public sealed class AdditionalWriteTools(KashFlowSession session, McpRuntimeOpti
         return JsonResults.Serialize(await session.Client.UpdateReceiptAsync(receipt, cancellationToken));
     }
 
-    [McpServerTool(Name = "update_receipt_header"), Description("Requires KashFlow__ReadOnly=false. Update header and insert line items provided")]
+    [McpServerTool(Name = "update_receipt_header"), Description("Requires KashFlow__ReadOnly=false. Update header and insert line items provided. Line Rate and VatAmount are document currency. KashFlow stores SOAP receipt line amounts in GBP, so foreign lines are divided by ExchangeRate (foreign currency units per 1 GBP) before the call. ExchangeRate is required when CurrencyCode is not GBP. Header NetAmount and VATAmount stay in the document currency.")]
     public async Task<string> UpdateReceiptHeader(
         [Description("SOAP parameter receipt (Invoice).")] Invoice receipt,
         CancellationToken cancellationToken = default)

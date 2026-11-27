@@ -117,6 +117,8 @@ public sealed partial class KashFlowClient : IDisposable, IAsyncDisposable
         if (_readOnly && !IsReadOperation(operation))
             throw new KashFlowException(operation, $"KashFlow {operation} is blocked because this connection is read-only.");
 
+        request = PrepareReceiptCurrency(request);
+
         using var timeout = new CancellationTokenSource(_timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
 
@@ -146,6 +148,41 @@ public sealed partial class KashFlowClient : IDisposable, IAsyncDisposable
             var body = await httpResponse.Content.ReadAsStringAsync(linked.Token).ConfigureAwait(false);
             return ReadResponse<TResponse>(operation, (int)httpResponse.StatusCode, body);
         }
+    }
+
+    /// <summary>
+    /// Purchase-receipt SOAP line amounts are home currency. Copy the caller's document-currency
+    /// receipt and send GBP line rates. The caller's object is not modified. Sales invoices are left alone.
+    /// </summary>
+    private static TRequest PrepareReceiptCurrency<TRequest>(TRequest request)
+        where TRequest : class
+    {
+        switch (request)
+        {
+            case InsertReceipt2Request insert when insert.Receipt is not null:
+                insert.Receipt = ReceiptCurrency.ToSoap(insert.Receipt);
+                break;
+            case UpdateReceipt2Request update when update.Receipt is not null:
+                update.Receipt = ReceiptCurrency.ToSoap(update.Receipt);
+                break;
+            case InsertReceiptRequest insert when insert.Inv is not null:
+                insert.Inv = ReceiptCurrency.ToSoap(insert.Inv);
+                break;
+            case UpdateReceiptRequest update when update.Receipt is not null:
+                update.Receipt = ReceiptCurrency.ToSoap(update.Receipt);
+                break;
+            case UpdateReceiptHeaderRequest update when update.Receipt is not null:
+                update.Receipt = ReceiptCurrency.ToSoap(update.Receipt);
+                break;
+            case InsertReceipt_TypeDefinedRequest insert when insert.Inv_TD is not null:
+                insert.Inv_TD = ReceiptCurrency.ToSoap(insert.Inv_TD);
+                break;
+            case UpdateReceipt_TypeDefinedRequest update when update.Receipt_TD is not null:
+                update.Receipt_TD = ReceiptCurrency.ToSoap(update.Receipt_TD);
+                break;
+        }
+
+        return request;
     }
 
     private static void EnsureOk(string operation, IKashFlowStatus response)

@@ -317,7 +317,7 @@ public sealed class RestTools(KashFlowSession session, McpRuntimeOptions runtime
         });
     }
 
-    [McpServerTool(Name = "update_purchase_payment_lines"), Description("Edit purchase receipt PaymentLines in place via KashFlow REST GET+PUT /v2/purchases/{number}. Read-modify-write: copies LineItems, supplier, currency, and dates from the current receipt so only PaymentLines change. Use BankTransactionId to link a payment line to a bank transaction. Requires memorable word. Requires ReadOnly=false unless dryRun=true.")]
+    [McpServerTool(Name = "update_purchase_payment_lines"), Description("Edit purchase receipt PaymentLines in place via KashFlow REST GET+PUT /v2/purchases/{number}. Read-modify-write: copies LineItems, supplier, currency, and dates from the current receipt so only PaymentLines change. REST Rate is quote currency and HomeCurrencyRate is GBP; both are copied, and a missing home rate on a foreign purchase is filled as quote amount / exchange rate (foreign units per 1 GBP). Use BankTransactionId to link a payment line to a bank transaction. Requires memorable word. Requires ReadOnly=false unless dryRun=true.")]
     public async Task<string> UpdatePurchasePaymentLinesAsync(
         [Description("Purchase receipt number.")] int receiptNumber,
         [Description("Payment line edits. With id: patch that existing line. Without id: append a new line (date, amount, accountId, method required).")] List<PurchasePaymentLineEditInput> paymentLines,
