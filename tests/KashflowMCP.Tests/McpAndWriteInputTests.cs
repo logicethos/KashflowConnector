@@ -432,12 +432,15 @@ public class McpToolsListTests
         foreach (var field in new[]
         {
             "receiptNumber", "paymentDate", "amount", "paymentMethodId", "paymentMethodName",
-            "bankAccountId", "bankAccountCode", "note",
+            "bankAccountId", "bankAccountCode", "note", "dryRun",
         })
         {
             Assert.True(receiptPayment.GetProperty("properties").TryGetProperty(field, out var property), field);
             Assert.True(property.TryGetProperty("description", out var fieldDescription) && fieldDescription.GetString()!.Length > 0, field);
         }
+
+        Assert.Contains("credit note", tools["insert_receipt_payment"].Description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("negative", receiptPayment.GetProperty("properties").GetProperty("amount").GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
 
         foreach (var writeName in new[]
                  {
@@ -555,6 +558,8 @@ public class McpToolsListTests
         var paymentLines = tools["update_purchase_payment_lines"].JsonSchema.GetProperty("properties");
         foreach (var field in new[] { "receiptNumber", "paymentLines", "replaceAll", "dryRun" })
             Assert.True(paymentLines.TryGetProperty(field, out _), field);
+        Assert.Contains("credit note", tools["update_purchase_payment_lines"].Description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("negative", tools["pay_purchases_bulk"].Description, StringComparison.OrdinalIgnoreCase);
 
         var attach = tools["attach_purchase_file"].JsonSchema.GetProperty("properties");
         foreach (var field in new[] { "receiptNumber", "filePath", "contentBase64", "fileName", "dryRun" })

@@ -67,7 +67,8 @@ These tools record money paid against a purchase receipt (a supplier bill), not 
 
 - `receiptNumber` (integer, required) — purchase receipt number. Sent as `PayInvoice`.
 - `paymentDate` (date-time, required) — sent as `PayDate`.
-- `amount` (number, required, greater than 0) — sent as `PayAmount`.
+- `amount` (number, required, non-zero) — sent as `PayAmount`. Positive is money out (PaidOut). A purchase credit note uses a negative amount, which KashFlow records as a PaidIn (money in) bank line. Precedent: SOAP `InsertReceiptPayment` on receipt KF04026, payID 146449956, `PayAmount` -11.98. Zero is rejected.
+- `dryRun` (boolean, optional) — when true, return that payment (including a negative `payAmount`) and `bankLine` (`PaidIn` or `PaidOut`) without calling `InsertReceiptPayment`. Works while read-only.
 - `paymentMethodId` (integer, optional) — `methodId` from `get_receipt_payment_methods`. Sent as `PayMethod`.
 - `paymentMethodName` (string, optional) — used only when `paymentMethodId` is omitted.
 - `bankAccountId` (integer, optional) — `accountId` from `get_bank_accounts`. Sent as `PayAccount`.
@@ -126,8 +127,8 @@ Add-only. Validates before writing: allocations must sum exactly to `totalAmount
 | Parameter | Required | Meaning |
 | --- | --- | --- |
 | `paymentDate` | yes | Date on every payment. |
-| `totalAmount` | yes | Bank amount being split. |
-| `allocations` | yes | Array of `{ receiptNumber, amount }` with `amount` &gt; 0. |
+| `totalAmount` | yes | Bank amount being split. Non-zero. A negative total is money in. |
+| `allocations` | yes | Array of `{ receiptNumber, amount }`. `amount` must be non-zero. A negative amount is a purchase credit note and becomes its own PaidIn bank line. |
 | `bankAccountId` / `bankAccountCode` | one | Paying bank account. |
 | `paymentMethodId` / `paymentMethodName` | one | Payment method. |
 | `note` | no | Stored on every payment. |
@@ -140,17 +141,17 @@ KashFlow marks the REST API as unfinished / likely to break; prefer SOAP tools w
 
 ### `pay_purchases_bulk`
 
-UI “New batch payment”: one bank-feed debit allocated across several purchase receipts via `POST /v2/purchases/bulk/payments`. Example: Starling `bankAccountCode` **1206**, payment date **2026-09-10**, `totalAmount` **91.28** = KF04199 **2.40** + KF04200 **88.88**.
+UI “New batch payment”: one bank-feed line allocated across several purchase receipts via `POST /v2/purchases/bulk/payments`. A positive total is PaidOut (money out). A negative total is PaidIn (money in), for example a batch of purchase credit notes. Example: Starling `bankAccountCode` **1206**, payment date **2026-09-10**, `totalAmount` **91.28** = KF04199 **2.40** + KF04200 **88.88**.
 
 | Parameter | Required | Meaning |
 | --- | --- | --- |
 | `paymentDate` | yes | Sent as `Date` (`yyyy-MM-dd`). |
-| `totalAmount` | yes | Must equal the sum of allocations to the penny. |
-| `allocations` | yes | `{ receiptNumber, amount }` → `PaymentItems[{ObjectNumber, Amount}]`. |
+| `totalAmount` | yes | Must equal the sum of allocations to the penny. Non-zero. Positive is one PaidOut bank line; negative is one PaidIn (money in) bank line. |
+| `allocations` | yes | `{ receiptNumber, amount }` → `PaymentItems[{ObjectNumber, Amount}]`. Non-zero. A negative amount is a purchase credit note inside that one bank line. |
 | `bankAccountId` / `bankAccountCode` | one | Paying bank → `AccountId`. |
 | `paymentMethodId` / `paymentMethodName` | one | Payment method → `Method`. |
 | `note` | no | Sent as `Comment`. |
-| `dryRun` | no | When `true`, return the exact REST request body without writing. Default `false`. |
+| `dryRun` | no | When `true`, return the REST request body, the signed total, and `bankLine` (`PaidIn` or `PaidOut`) without writing. Default `false`. |
 
 ### `link_bank_transactions_to_purchases`
 
@@ -171,7 +172,7 @@ UI “New batch payment”: one bank-feed debit allocated across several purchas
 | --- | --- | --- |
 | `bulkPaymentNumber` | yes | Bulk payment number from `pay_purchases_bulk`. |
 | `paymentDate`, `note`, bank/method, `allocations` | no (update) | Fields to change; `allocations` replaces the whole split list. |
-| `dryRun` | no (writes) | Preview without writing. |
+| `dryRun` | no (writes) | Preview without writing. PUT includes the signed batch total and `PaidIn` or `PaidOut`. |
 
 ### `update_purchase_payment_lines`
 
@@ -180,13 +181,30 @@ UI “New batch payment”: one bank-feed debit allocated across several purchas
 | Parameter | Required | Meaning |
 | --- | --- | --- |
 | `receiptNumber` | yes | Purchase receipt number. |
-| `paymentLines` | yes | Edits: with `id` patch that line; without `id` append (`date`, `amount`, `accountId`, `method` required). |
+| `paymentLines` | yes | Edits: with `id` patch that line; without `id` append (`date`, `amount`, `accountId`, `method` required). `amount` must be non-zero. Negative is a purchase credit note (PaidIn / money in). |
 | `replaceAll` | no | Replace the entire `PaymentLines` array. Default `false`. |
-| `dryRun` | no | Exact PUT body without writing. |
+| `dryRun` | no | PUT body plus each line's signed amount and `PaidIn` or `PaidOut`, without writing. |
 
 ### `list_purchase_files` / `attach_purchase_file` / `delete_purchase_file`
 
 `GET /v2/purchases/{number}/files`, upload via `POST /v2/files?objectType=purchases` then `POST /v2/purchases/{number}/files`, delete via `DELETE /v2/purchases/{number}/file?fileName=`. Attach accepts `filePath` or `contentBase64` (+ `fileName`); max **10 MiB**. Multipart field name is `file` (swagger body undocumented — confirm live). Writes support `dryRun`.
+
+These REST file routes are KashFlow's Dropbox integration. Without Dropbox connected, KashFlow responds `The url specified is not authorised. User Dropbox account is not setup.` SOAP `attach_file_to_receipt` is a different store (Amazon S3) and is not a substitute. Details are in [Receipt file attachments](#receipt-file-attachments).
+
+### Receipt file attachments
+
+SOAP `attach_file_to_receipt` (`AttachFileToReceipt`) sends only:
+
+| SOAP element | Meaning |
+| --- | --- |
+| `ReceiptNo` | Purchase receipt number. |
+| `Base64String` | File bytes, base64. |
+| `ContentType` | MIME type, for example `application/pdf`. Docs example: `plain/text`. |
+| `Filename` | Name including the extension. |
+| `FileExtension` | Extension such as `pdf` or `txt`. |
+| `FileSize` | Size in bytes, as a string, for example `510`. |
+
+There is no S3 metadata parameter. `GetReceiptAttachments` can later return `MetaName` / `MetaValue` / `AmazonFilename` / `FileURL`, but the attach call cannot set them. KashFlow stores API uploads on Amazon S3 when Dropbox is not enabled for receipts. The UI download check then rejects objects whose S3 metadata was not written by the web uploader, with `Not from the trusted source`. REST `/v2/files` and `/v2/purchases/{number}/files` are the Dropbox routes and fail closed with `User Dropbox account is not setup`. The only Amazon REST route, `PUT /v2/internal/amazonfiles/migration`, moves existing S3 attachments onto Dropbox and also requires Dropbox. No client-side payload fixes that metadata, and this server does not call the migration endpoint.
 
 ### `list_bank_reconciliations` / `get_bank_reconciliation_metadata` / `get_bank_reconciliation`
 

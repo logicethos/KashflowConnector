@@ -42,10 +42,12 @@ public static class ReceiptOutstanding
     {
         if (receiptNumber <= 0)
             throw new ArgumentException("receiptNumber must be the purchase receipt number (greater than 0).");
-        if (!allowNonPositive && amount <= 0)
-            throw new ArgumentException("amount must be greater than 0.");
-        if (allowNonPositive && amount == 0)
-            throw new ArgumentException("amount must be non-zero.");
+        // allowNonPositive remains for existing callers (FX fluctuation, rounding write-off).
+        // Negative amounts are always accepted; only zero is rejected.
+        if (amount == 0)
+            throw new ArgumentException(allowNonPositive
+                ? "amount must be non-zero."
+                : ReceiptPaymentBankLine.NonZeroAmountMessage);
         if (paymentMethodId <= 0)
             throw new ArgumentException("paymentMethodId must be a methodId from get_receipt_payment_methods.");
         if (bankAccountId <= 0)

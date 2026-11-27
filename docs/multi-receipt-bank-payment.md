@@ -42,6 +42,8 @@ Example dry-run body for the Starling case (account id and method id resolved at
 }
 ```
 
+Amounts must be non-zero. A negative `PaymentItems.Amount` is a purchase credit note inside the batch. The single bank line follows the signed total: positive is PaidOut (money out), negative is PaidIn (money in). `dryRun` returns that direction with the signed amounts. Zero is rejected.
+
 ## Live tests still needed
 
 - Confirm memorable-word login works with the same API password as SOAP.

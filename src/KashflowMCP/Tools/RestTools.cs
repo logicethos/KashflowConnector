@@ -24,11 +24,11 @@ public sealed class RestTools(KashFlowSession session, McpRuntimeOptions runtime
         PropertyNamingPolicy = null,
     };
 
-    [McpServerTool(Name = "pay_purchases_bulk"), Description("Pay several purchase receipts as one bank-feed debit via KashFlow REST POST /v2/purchases/bulk/payments (UI New batch payment). SOAP InsertReceiptPayment cannot do this — each SOAP payment creates its own bank line. Validates that allocations sum exactly to totalAmount, receipt numbers are unique, each receipt exists, and no allocation exceeds that receipt's GBP outstanding (book GBP value minus AmountPaid; for FX receipts book value is (net+VAT)/ExchangeRate). Requires KashFlow__MemorableWord (REST session auth). Requires KashFlow__ReadOnly=false unless dryRun=true. dryRun returns the exact REST request body without writing. Example: Starling 1206, 2026-09-10, £91.28 = KF04199 £2.40 + KF04200 £88.88.")]
+    [McpServerTool(Name = "pay_purchases_bulk"), Description("Pay several purchase receipts as one bank-feed line via KashFlow REST POST /v2/purchases/bulk/payments (UI New batch payment). SOAP InsertReceiptPayment cannot do this — each SOAP payment creates its own bank line. Validates that allocations sum exactly to totalAmount, receipt numbers are unique, each receipt exists, and no allocation exceeds that receipt's GBP outstanding in the same direction (book GBP value minus AmountPaid; for FX receipts book value is (net+VAT)/ExchangeRate). Amounts must be non-zero. A negative allocation is a purchase credit note. The one bank line follows totalAmount: positive is PaidOut (money out), negative is PaidIn (money in). Requires KashFlow__MemorableWord (REST session auth). Requires KashFlow__ReadOnly=false unless dryRun=true. dryRun returns the exact REST request body and the bank-line direction without writing. Example: Starling 1206, 2026-09-10, £91.28 = KF04199 £2.40 + KF04200 £88.88.")]
     public async Task<string> PayPurchasesBulkAsync(
         [Description("Payment date (ISO-8601). Sent as Date (yyyy-MM-dd).")] DateTime paymentDate,
-        [Description("Bank amount being paid. Must equal the sum of allocations to the penny.")] decimal totalAmount,
-        [Description("Per-receipt splits. Each amount must be greater than 0. Sent as PaymentItems[{ObjectNumber, Amount}].")] List<ReceiptPaymentAllocationInput> allocations,
+        [Description("Signed bank amount. Must equal the sum of allocations to the penny. Non-zero. Negative when the batch is money in (PaidIn), for example purchase credit notes.")] decimal totalAmount,
+        [Description("Per-receipt splits. Each amount must be non-zero (negative for a purchase credit note). Sent as PaymentItems[{ObjectNumber, Amount}].")] List<ReceiptPaymentAllocationInput> allocations,
         [Description("Bank account id from get_bank_accounts (accountId). Sent as AccountId. Optional when bankAccountCode is set.")] int? bankAccountId = null,
         [Description("Bank account nominal code from get_bank_accounts (accountCode), for example 1206 Starling. Used only when bankAccountId is omitted.")] int? bankAccountCode = null,
         [Description("Payment method id from get_receipt_payment_methods (methodId). Sent as Method. Optional when paymentMethodName is set.")] int? paymentMethodId = null,
@@ -57,24 +57,7 @@ public sealed class RestTools(KashFlowSession session, McpRuntimeOptions runtime
 
         var requestBodyJson = PayPurchasesBulk.SerializeRequestBody(planned.Request);
         if (dryRun)
-        {
-            return JsonResults.Serialize(new
-            {
-                dryRun = true,
-                endpoint = "POST https://api.kashflow.com/v2/purchases/bulk/payments",
-                totalAmount,
-                payAccount = accountId,
-                payMethod = methodId,
-                request = JsonSerializer.Deserialize<JsonElement>(requestBodyJson),
-                requestBodyJson,
-                allocations = planned.Planned.Select(item => new
-                {
-                    receiptNumber = item.ReceiptNumber,
-                    amount = item.Amount,
-                    outstandingBefore = item.OutstandingBefore,
-                }),
-            });
-        }
+            return PayPurchasesBulk.SerializeDryRun(planned, totalAmount);
 
         var response = await rest.PostPurchasesBulkPaymentAsync(planned.Request, cancellationToken);
         return JsonResults.Serialize(new
@@ -196,7 +179,7 @@ public sealed class RestTools(KashFlowSession session, McpRuntimeOptions runtime
         [Description("Optional new bank account code. Used only when bankAccountId is omitted.")] int? bankAccountCode = null,
         [Description("Optional new payment method id. Sent as Method.")] int? paymentMethodId = null,
         [Description("Optional new payment method name. Used only when paymentMethodId is omitted.")] string? paymentMethodName = null,
-        [Description("Optional replacement PaymentItems. When set, replaces the whole split list.")] List<ReceiptPaymentAllocationInput>? allocations = null,
+        [Description("Optional replacement PaymentItems. When set, replaces the whole split list. Each amount must be non-zero; a negative amount is a purchase credit note (PaidIn / money in when the signed total is negative).")] List<ReceiptPaymentAllocationInput>? allocations = null,
         [Description("When true, return the exact REST request body without writing. Default false.")] bool dryRun = false,
         CancellationToken cancellationToken = default)
     {
@@ -242,12 +225,14 @@ public sealed class RestTools(KashFlowSession session, McpRuntimeOptions runtime
             request.PaymentItems = allocations
                 .Select(item =>
                 {
-                    if (item.ReceiptNumber <= 0 || item.Amount <= 0)
-                        throw new ArgumentException("Each allocation needs receiptNumber and amount greater than 0.");
+                    var rounded = decimal.Round(item.Amount, 2, MidpointRounding.AwayFromZero);
+                    if (item.ReceiptNumber <= 0 || rounded == 0)
+                        throw new ArgumentException(
+                            "Each allocation needs receiptNumber greater than 0 and a non-zero amount. Use a negative amount for a purchase credit note (PaidIn / money in bank line).");
                     return new BulkPurchasePaymentItem
                     {
                         ObjectNumber = item.ReceiptNumber,
-                        Amount = decimal.Round(item.Amount, 2, MidpointRounding.AwayFromZero),
+                        Amount = rounded,
                     };
                 })
                 .ToList();
@@ -260,10 +245,17 @@ public sealed class RestTools(KashFlowSession session, McpRuntimeOptions runtime
         var endpoint = $"PUT https://api.kashflow.com/v2/purchases/bulk/payments/{bulkPaymentNumber}";
         if (dryRun)
         {
+            var batchTotal = request.PaymentItems.Sum(item => item.Amount);
+            var effect = batchTotal == 0 ? null : ReceiptPaymentBankLine.DescribeBatch(batchTotal);
             return JsonResults.Serialize(new
             {
                 dryRun = true,
                 endpoint,
+                batchAmount = batchTotal,
+                bankLine = effect?.BankLine,
+                moneyDirection = effect?.MoneyDirection,
+                bankLineNote = effect?.BankLineNote
+                    ?? "Payment items sum to 0, so this bulk payment has no PaidIn or PaidOut bank line.",
                 request = JsonSerializer.Deserialize<JsonElement>(requestBodyJson),
                 requestBodyJson,
             });
@@ -317,12 +309,12 @@ public sealed class RestTools(KashFlowSession session, McpRuntimeOptions runtime
         });
     }
 
-    [McpServerTool(Name = "update_purchase_payment_lines"), Description("Edit purchase receipt PaymentLines in place via KashFlow REST GET+PUT /v2/purchases/{number}. Read-modify-write: copies LineItems, supplier, currency, and dates from the current receipt so only PaymentLines change. REST Rate is quote currency and HomeCurrencyRate is GBP; both are copied, and a missing home rate on a foreign purchase is filled as quote amount / exchange rate (foreign units per 1 GBP). Use BankTransactionId to link a payment line to a bank transaction. Requires memorable word. Requires ReadOnly=false unless dryRun=true.")]
+    [McpServerTool(Name = "update_purchase_payment_lines"), Description("Edit purchase receipt PaymentLines in place via KashFlow REST GET+PUT /v2/purchases/{number}. Read-modify-write: copies LineItems, supplier, currency, and dates from the current receipt so only PaymentLines change. REST Rate is quote currency and HomeCurrencyRate is GBP; both are copied, and a missing home rate on a foreign purchase is filled as quote amount / exchange rate (foreign units per 1 GBP). Use BankTransactionId to link a payment line to a bank transaction. Amounts must be non-zero. Purchase credit notes use a negative amount, which KashFlow records as a PaidIn (money in) bank line. dryRun returns the PUT body and each line's amount with PaidIn or PaidOut. Requires memorable word. Requires ReadOnly=false unless dryRun=true.")]
     public async Task<string> UpdatePurchasePaymentLinesAsync(
         [Description("Purchase receipt number.")] int receiptNumber,
-        [Description("Payment line edits. With id: patch that existing line. Without id: append a new line (date, amount, accountId, method required).")] List<PurchasePaymentLineEditInput> paymentLines,
+        [Description("Payment line edits. With id: patch that existing line. Without id: append a new line (date, amount, accountId, method required). Amount must be non-zero; negative for a purchase credit note (PaidIn / money in).")] List<PurchasePaymentLineEditInput> paymentLines,
         [Description("When true, replace the entire PaymentLines array with paymentLines. Default false (merge/append).")] bool replaceAll = false,
-        [Description("When true, return the exact REST PUT body without writing. Default false.")] bool dryRun = false,
+        [Description("When true, return the REST PUT body and each payment line amount with PaidIn (money in, negative / credit note) or PaidOut (money out) without writing. Default false.")] bool dryRun = false,
         CancellationToken cancellationToken = default)
     {
         if (!dryRun)
@@ -355,17 +347,7 @@ public sealed class RestTools(KashFlowSession session, McpRuntimeOptions runtime
         var endpoint = $"PUT https://api.kashflow.com/v2/purchases/{receiptNumber}";
 
         if (dryRun)
-        {
-            return JsonResults.Serialize(new
-            {
-                dryRun = true,
-                endpoint,
-                receiptNumber,
-                replaceAll,
-                request = JsonSerializer.Deserialize<JsonElement>(requestBodyJson),
-                requestBodyJson,
-            });
-        }
+            return PurchasePaymentLines.SerializeDryRun(receiptNumber, replaceAll, endpoint, request);
 
         var response = await rest.PutPurchaseAsync(receiptNumber, request, cancellationToken);
         return JsonResults.Serialize(new
@@ -705,7 +687,7 @@ public sealed class PurchasePaymentLineEditInput
     [Description("Payment date (ISO-8601). Required for new lines.")]
     public DateTime? Date { get; set; }
 
-    [Description("Payment amount. Required for new lines.")]
+    [Description("Payment amount. Required for new lines. Non-zero. Negative for a purchase credit note (PaidIn / money in bank line). Zero is rejected.")]
     public decimal? Amount { get; set; }
 
     [Description("Bank account id (AccountId). Required for new lines.")]

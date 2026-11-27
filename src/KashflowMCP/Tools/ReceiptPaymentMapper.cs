@@ -19,8 +19,7 @@ public static class ReceiptPaymentMapper
     {
         if (receiptNumber <= 0)
             throw new ArgumentException("receiptNumber must be the purchase receipt number (greater than 0).");
-        if (amount <= 0)
-            throw new ArgumentException("amount must be greater than 0.");
+        ReceiptPaymentBankLine.EnsureNonZero(amount);
         if (paymentMethodId <= 0)
             throw new ArgumentException("paymentMethodId must be a methodId from get_receipt_payment_methods.");
         if (bankAccountId <= 0)

@@ -8,7 +8,8 @@ namespace KashflowMCP.Tools;
 
 /// <summary>
 /// Builds and validates REST <c>POST /v2/purchases/bulk/payments</c> requests
-/// (UI “New batch payment”: one bank debit for many receipts).
+/// (UI “New batch payment”: one bank line for many receipts).
+/// A positive total is PaidOut; a negative total is PaidIn (purchase credit notes).
 /// </summary>
 public static class PayPurchasesBulk
 {
@@ -65,4 +66,37 @@ public static class PayPurchasesBulk
     /// <summary>Exact JSON body that would be POSTed to KashFlow REST.</summary>
     public static string SerializeRequestBody(BulkPurchasePaymentRequest request)
         => JsonSerializer.Serialize(request ?? throw new ArgumentNullException(nameof(request)), RequestJsonOptions);
+
+    /// <summary>
+    /// Dry-run JSON for <c>pay_purchases_bulk</c>. The bank line follows the signed total
+    /// (negative total is PaidIn / money in).
+    /// </summary>
+    public static string SerializeDryRun(PlannedBulkPayment planned, decimal totalAmount)
+    {
+        ArgumentNullException.ThrowIfNull(planned);
+        var requestBodyJson = SerializeRequestBody(planned.Request);
+        var bankAmount = planned.Request.PaymentItems.Sum(item => item.Amount);
+        var effect = bankAmount == 0 ? null : ReceiptPaymentBankLine.DescribeBatch(bankAmount);
+        return JsonResults.Serialize(new
+        {
+            dryRun = true,
+            endpoint = "POST https://api.kashflow.com/v2/purchases/bulk/payments",
+            totalAmount,
+            bankLineAmount = bankAmount,
+            payAccount = planned.Request.AccountId,
+            payMethod = planned.Request.Method,
+            bankLine = effect?.BankLine,
+            moneyDirection = effect?.MoneyDirection,
+            bankLineNote = effect?.BankLineNote
+                ?? "Payment items sum to 0, so this bulk payment has no PaidIn or PaidOut bank line.",
+            request = JsonSerializer.Deserialize<JsonElement>(requestBodyJson),
+            requestBodyJson,
+            allocations = planned.Planned.Select(item => new
+            {
+                receiptNumber = item.ReceiptNumber,
+                amount = item.Amount,
+                outstandingBefore = item.OutstandingBefore,
+            }),
+        });
+    }
 }
