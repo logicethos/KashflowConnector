@@ -280,7 +280,7 @@ public sealed class ReceiptPaymentAllocationInput
     [Description("Purchase receipt number.")]
     public int ReceiptNumber { get; set; }
 
-    [Description("Amount to allocate to this receipt, greater than 0.")]
+    [Description("Amount to allocate to this receipt. Non-zero. Negative for a purchase credit note (PaidIn / money in).")]
     public decimal Amount { get; set; }
 }
 

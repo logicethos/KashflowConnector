@@ -138,8 +138,9 @@ public static class PurchasePaymentLines
 
     private static PurchasePaymentLineRequest ToNewLine(PaymentLineEdit edit)
     {
-        if (edit.Amount is null || edit.Amount <= 0)
-            throw new ArgumentException("New payment lines require amount greater than 0.");
+        if (edit.Amount is null || edit.Amount == 0)
+            throw new ArgumentException(
+                "New payment lines require a non-zero amount. Use a negative amount for a purchase credit note (PaidIn / money in bank line).");
         if (edit.AccountId is null || edit.AccountId <= 0)
             throw new ArgumentException("New payment lines require accountId (bank account id).");
         if (edit.Method is null || edit.Method <= 0)
@@ -151,7 +152,7 @@ public static class PurchasePaymentLines
         {
             Id = edit.Id is long id && id > 0 ? id : null,
             Date = edit.Date.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            Amount = decimal.Round(edit.Amount.Value, 2, MidpointRounding.AwayFromZero),
+            Amount = RoundAmount(edit.Amount.Value),
             AccountId = edit.AccountId,
             Method = edit.Method,
             Note = string.IsNullOrWhiteSpace(edit.Note) ? null : edit.Note.Trim(),
@@ -170,11 +171,7 @@ public static class PurchasePaymentLines
         if (edit.Date is DateTime date)
             current.Date = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (edit.Amount is decimal amount)
-        {
-            if (amount <= 0)
-                throw new ArgumentException("amount must be greater than 0.");
-            current.Amount = decimal.Round(amount, 2, MidpointRounding.AwayFromZero);
-        }
+            current.Amount = RoundAmount(amount);
 
         if (edit.AccountId is int accountId)
             current.AccountId = accountId;
@@ -193,5 +190,36 @@ public static class PurchasePaymentLines
         if (edit.ResetBankReconciliation is bool reset)
             current.ResetBankReconciliation = reset;
         return current;
+    }
+
+    private static decimal RoundAmount(decimal amount)
+    {
+        var rounded = decimal.Round(amount, 2, MidpointRounding.AwayFromZero);
+        if (rounded == 0)
+            throw new ArgumentException(
+                "amount must be non-zero after rounding to 2 decimal places. Use a negative amount for a purchase credit note (PaidIn / money in bank line).");
+        return rounded;
+    }
+
+    /// <summary>Dry-run JSON for <c>update_purchase_payment_lines</c>, including PaidIn / PaidOut.</summary>
+    public static string SerializeDryRun(int receiptNumber, bool replaceAll, string endpoint, PurchaseRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var requestBodyJson = SerializeRequestBody(request);
+        var bankLines = (request.PaymentLines ?? [])
+            .Where(line => line.Amount is decimal amount && amount != 0)
+            .Select(line => ReceiptPaymentBankLine.Describe(line.Amount!.Value))
+            .ToList();
+
+        return JsonResults.Serialize(new
+        {
+            dryRun = true,
+            endpoint,
+            receiptNumber,
+            replaceAll,
+            request = JsonSerializer.Deserialize<JsonElement>(requestBodyJson),
+            requestBodyJson,
+            bankLines,
+        });
     }
 }

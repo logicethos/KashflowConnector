@@ -68,19 +68,21 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
         return JsonResults.Serialize(new { journalId = id });
     }
 
-    [McpServerTool(Name = "insert_receipt_payment"), Description("Record a payment against a purchase receipt (SOAP InsertReceiptPayment). Requires KashFlow__ReadOnly=false. Check get_receipt_payments first so the receipt is not paid twice. payInvoice is the receipt number. payAccount is the bank account id from get_bank_accounts (accountId). If you know the nominal code instead (accountCode, for example 1206 Starling or 1209 Revolut), pass bankAccountCode and it is resolved to accountId. payMethod is the methodId from get_receipt_payment_methods. When both an id and a name or code are passed, the id is used.")]
+    [McpServerTool(Name = "insert_receipt_payment"), Description("Record a payment against a purchase receipt (SOAP InsertReceiptPayment). Requires KashFlow__ReadOnly=false unless dryRun=true. Check get_receipt_payments first so the receipt is not paid twice. payInvoice is the receipt number. payAccount is the bank account id from get_bank_accounts (accountId). If you know the nominal code instead (accountCode, for example 1206 Starling or 1209 Revolut), pass bankAccountCode and it is resolved to accountId. payMethod is the methodId from get_receipt_payment_methods. When both an id and a name or code are passed, the id is used. Amount must be non-zero. A positive amount is money out (PaidOut). Purchase credit notes use a negative amount: KashFlow records that as a PaidIn (money in) bank line (precedent: receipt KF04026, PayAmount -11.98). dryRun returns the SOAP payment and bank-line direction without writing.")]
     public async Task<string> InsertReceiptPayment(
         [Description("Purchase receipt number. Stored as Payment.PayInvoice.")] int receiptNumber,
         [Description("Date the receipt was paid (ISO-8601). Stored as Payment.PayDate.")] DateTime paymentDate,
-        [Description("Amount paid, greater than 0, in the receipt currency. Stored as Payment.PayAmount.")] decimal amount,
+        [Description("Amount in the receipt currency, stored as Payment.PayAmount. Non-zero. Positive pays a supplier bill (PaidOut / money out). Negative is a purchase credit note (PaidIn / money in).")] decimal amount,
         [Description("Payment method id from get_receipt_payment_methods (methodId). Stored as Payment.PayMethod. Optional when paymentMethodName is set.")] int? paymentMethodId = null,
         [Description("Payment method name from get_receipt_payment_methods (methodName), matched ignoring case. Used only when paymentMethodId is omitted.")] string? paymentMethodName = null,
         [Description("Bank account id from get_bank_accounts (accountId). Stored as Payment.PayAccount. Optional when bankAccountCode is set. When both are set, this id is used.")] int? bankAccountId = null,
         [Description("Bank account nominal code from get_bank_accounts (accountCode), for example 1206. Resolved to accountId. Used only when bankAccountId is omitted.")] int? bankAccountCode = null,
         [Description("Optional note stored as Payment.PayNote.")] string? note = null,
+        [Description("When true, return the SOAP payment, including a negative PayAmount, and whether the bank line will be PaidIn (money in) or PaidOut (money out), without writing. Default false.")] bool dryRun = false,
         CancellationToken cancellationToken = default)
     {
-        ToolGuard.EnsureWritable(runtime);
+        if (!dryRun)
+            ToolGuard.EnsureWritable(runtime);
 
         var methodId = paymentMethodId is int givenMethod && givenMethod > 0
             ? givenMethod
@@ -97,14 +99,39 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
                 await session.Client.GetBankAccountsAsync(cancellationToken));
 
         var payment = ReceiptPaymentMapper.Create(receiptNumber, paymentDate, amount, methodId, accountId, note);
+        var effect = ReceiptPaymentBankLine.Describe(payment.PayAmount);
+        if (dryRun)
+        {
+            return JsonResults.Serialize(new
+            {
+                dryRun = true,
+                operation = "SOAP InsertReceiptPayment",
+                receiptNumber = payment.PayInvoice,
+                paymentDate = payment.PayDate,
+                amount = effect.Amount,
+                payAmount = effect.Amount,
+                payAccount = payment.PayAccount,
+                payMethod = payment.PayMethod,
+                payNote = payment.PayNote,
+                bankLine = effect.BankLine,
+                moneyDirection = effect.MoneyDirection,
+                bankLineNote = effect.BankLineNote,
+            });
+        }
+
         var id = await session.Client.InsertReceiptPaymentAsync(payment, cancellationToken);
         return JsonResults.Serialize(new
         {
+            dryRun = false,
             receiptPaymentId = id,
             receiptNumber,
-            amount,
+            amount = effect.Amount,
+            payAmount = effect.Amount,
             payAccount = accountId,
             payMethod = methodId,
+            bankLine = effect.BankLine,
+            moneyDirection = effect.MoneyDirection,
+            bankLineNote = effect.BankLineNote,
         });
     }
 
@@ -165,11 +192,11 @@ public sealed class WriteTools(KashFlowSession session, McpRuntimeOptions runtim
         });
     }
 
-    [McpServerTool(Name = "allocate_bank_payment_to_receipts"), Description("Split one bank amount across several purchase receipts by calling InsertReceiptPayment once per allocation. Each insert creates its own bank-feed line (not KashFlow UI New batch payment / one debit for many receipts — SOAP cannot do that). Validates that allocations sum exactly to totalAmount, receipt numbers are unique, each receipt exists, and no allocation exceeds that receipt's outstanding balance. Add-only: never updates or deletes existing payments. Requires KashFlow__ReadOnly=false. If a later insert fails, earlier successes are left in place and returned so they can be undone with delete_receipt_payment.")]
+    [McpServerTool(Name = "allocate_bank_payment_to_receipts"), Description("Split one bank amount across several purchase receipts by calling InsertReceiptPayment once per allocation. Each insert creates its own bank-feed line: a positive amount is PaidOut (money out), a negative amount is a purchase credit note and is PaidIn (money in). Not KashFlow UI New batch payment. Validates that allocations sum exactly to totalAmount, receipt numbers are unique, each receipt exists, amounts are non-zero, and no allocation exceeds that receipt's outstanding balance in the same direction. Add-only: never updates or deletes existing payments. Requires KashFlow__ReadOnly=false. If a later insert fails, earlier successes are left in place and returned so they can be undone with delete_receipt_payment.")]
     public async Task<string> AllocateBankPaymentToReceipts(
         [Description("Payment date (ISO-8601) stored on every InsertReceiptPayment.")] DateTime paymentDate,
-        [Description("Bank amount being allocated. Must equal the sum of allocations to the penny.")] decimal totalAmount,
-        [Description("Per-receipt splits. Each amount must be greater than 0.")] List<ReceiptPaymentAllocationInput> allocations,
+        [Description("Bank amount being allocated. Must equal the sum of allocations to the penny. Non-zero. Negative when the split is money in (purchase credit notes).")] decimal totalAmount,
+        [Description("Per-receipt splits. Each amount must be non-zero. Negative for a purchase credit note (its own PaidIn / money in bank line).")] List<ReceiptPaymentAllocationInput> allocations,
         [Description("Bank account id from get_bank_accounts (accountId). Optional when bankAccountCode is set.")] int? bankAccountId = null,
         [Description("Bank account nominal code from get_bank_accounts (accountCode). Used only when bankAccountId is omitted.")] int? bankAccountCode = null,
         [Description("Payment method id from get_receipt_payment_methods. Optional when paymentMethodName is set.")] int? paymentMethodId = null,

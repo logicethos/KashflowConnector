@@ -106,6 +106,36 @@ public class KashFlowClientTests
     }
 
     [Fact]
+    public async Task InsertReceiptPayment_writes_a_negative_pay_amount()
+    {
+        var handler = new RecordingHandler(_ => Envelope("""
+            <InsertReceiptPaymentResponse xmlns="KashFlow">
+              <InsertReceiptPaymentResult>146449956</InsertReceiptPaymentResult>
+              <Status>OK</Status>
+            </InsertReceiptPaymentResponse>
+            """));
+        await using var client = Client(handler);
+
+        var id = await client.InsertReceiptPaymentAsync(new Payment
+        {
+            PayInvoice = 4026,
+            PayDate = new DateTime(2026, 4, 2),
+            PayAmount = -11.98m,
+            PayMethod = 3,
+            PayAccount = 8,
+            PayNote = "KF04026",
+        });
+
+        Assert.Equal(146449956, id);
+        Assert.Equal("\"KashFlow/InsertReceiptPayment\"", handler.SoapAction);
+        var document = XDocument.Parse(handler.Body);
+        Assert.Equal("4026", document.Descendants(Service + "PayInvoice").Single().Value);
+        Assert.Equal(-11.98m, decimal.Parse(document.Descendants(Service + "PayAmount").Single().Value, System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Equal("8", document.Descendants(Service + "PayAccount").Single().Value);
+        Assert.DoesNotContain(">11.98<", handler.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task InsertSupplier_OmitsUnsetDatesAndWritesLegacyBorderAsDecimal()
     {
         var handler = new RecordingHandler(_ => Envelope("""

@@ -619,6 +619,60 @@ public class PayPurchasesBulkTests
 
         Assert.Contains("exceeds outstanding", error.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Build_credit_note_dry_run_shows_negative_amount_as_paid_in()
+    {
+        var receipts = new Dictionary<int, KashFlow.Receipt2>
+        {
+            [4026] = new() { ReceiptNumber = 4026, NetAmount = -11.98m, VATAmount = 0m, AmountPaid = 0m },
+        };
+
+        var planned = PayPurchasesBulk.Build(
+            new DateTime(2026, 4, 2),
+            -11.98m,
+            [new(4026, -11.98m)],
+            receipts,
+            bankAccountId: 8,
+            paymentMethodId: 3,
+            note: "KF04026");
+
+        Assert.Equal(-11.98m, Assert.Single(planned.Request.PaymentItems).Amount);
+
+        using var doc = JsonDocument.Parse(PayPurchasesBulk.SerializeDryRun(planned, -11.98m));
+        Assert.True(doc.RootElement.GetProperty("dryRun").GetBoolean());
+        Assert.Equal(-11.98m, doc.RootElement.GetProperty("totalAmount").GetDecimal());
+        Assert.Equal(-11.98m, doc.RootElement.GetProperty("bankLineAmount").GetDecimal());
+        Assert.Equal("PaidIn", doc.RootElement.GetProperty("bankLine").GetString());
+        Assert.Equal("in", doc.RootElement.GetProperty("moneyDirection").GetString());
+        Assert.Contains("money in", doc.RootElement.GetProperty("bankLineNote").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("-11.98", doc.RootElement.GetProperty("requestBodyJson").GetString(), StringComparison.Ordinal);
+        Assert.Equal(-11.98m, doc.RootElement.GetProperty("request").GetProperty("PaymentItems")[0].GetProperty("Amount").GetDecimal());
+    }
+
+    [Fact]
+    public void Build_mixed_batch_keeps_the_credit_note_sign_and_a_positive_bank_line()
+    {
+        var receipts = new Dictionary<int, KashFlow.Receipt2>
+        {
+            [100] = new() { ReceiptNumber = 100, NetAmount = 100m, VATAmount = 0m, AmountPaid = 0m },
+            [4026] = new() { ReceiptNumber = 4026, NetAmount = -11.98m, VATAmount = 0m, AmountPaid = 0m },
+        };
+
+        var planned = PayPurchasesBulk.Build(
+            new DateTime(2026, 4, 2),
+            88.02m,
+            [new(100, 100m), new(4026, -11.98m)],
+            receipts,
+            8,
+            3,
+            null);
+
+        using var doc = JsonDocument.Parse(PayPurchasesBulk.SerializeDryRun(planned, 88.02m));
+        Assert.Equal("PaidOut", doc.RootElement.GetProperty("bankLine").GetString());
+        Assert.Equal(88.02m, doc.RootElement.GetProperty("bankLineAmount").GetDecimal());
+        Assert.Equal(-11.98m, doc.RootElement.GetProperty("request").GetProperty("PaymentItems")[1].GetProperty("Amount").GetDecimal());
+    }
 }
 
 public class PurchasePaymentLinesTests
@@ -705,5 +759,93 @@ public class PurchasePaymentLinesTests
         Assert.Null(replaced.Id);
         Assert.Equal("2026-02-01", replaced.Date);
         Assert.Equal(9m, replaced.Amount);
+    }
+
+    [Fact]
+    public void BuildUpdateRequest_keeps_a_negative_credit_note_amount_and_dry_run_says_paid_in()
+    {
+        var existing = new PurchaseResponse
+        {
+            Number = 4026,
+            SupplierCode = "SUP",
+            PaymentLines =
+            [
+                new PurchasePaymentLineResponse
+                {
+                    Id = 11,
+                    Date = "2026-04-01",
+                    Amount = 10m,
+                    AccountId = 8,
+                    Method = 3,
+                },
+            ],
+        };
+
+        var edited = PurchasePaymentLines.BuildUpdateRequest(
+            existing,
+            [new PurchasePaymentLines.PaymentLineEdit { Id = 11, Amount = -11.985m }],
+            replaceAll: false);
+        Assert.Equal(-11.99m, Assert.Single(edited.PaymentLines!).Amount);
+
+        var replaced = PurchasePaymentLines.BuildUpdateRequest(
+            existing,
+            [
+                new PurchasePaymentLines.PaymentLineEdit
+                {
+                    Date = new DateTime(2026, 4, 2),
+                    Amount = -11.98m,
+                    AccountId = 8,
+                    Method = 3,
+                    Note = "KF04026",
+                },
+            ],
+            replaceAll: true);
+
+        var line = Assert.Single(replaced.PaymentLines!);
+        Assert.Equal(-11.98m, line.Amount);
+        Assert.Equal("2026-04-02", line.Date);
+
+        using var doc = JsonDocument.Parse(PurchasePaymentLines.SerializeDryRun(
+            4026,
+            replaceAll: true,
+            endpoint: "PUT https://api.kashflow.com/v2/purchases/4026",
+            replaced));
+        Assert.True(doc.RootElement.GetProperty("dryRun").GetBoolean());
+        var bankLine = Assert.Single(doc.RootElement.GetProperty("bankLines").EnumerateArray());
+        Assert.Equal(-11.98m, bankLine.GetProperty("amount").GetDecimal());
+        Assert.Equal("PaidIn", bankLine.GetProperty("bankLine").GetString());
+        Assert.Equal("in", bankLine.GetProperty("moneyDirection").GetString());
+        Assert.Contains("money in", bankLine.GetProperty("bankLineNote").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(-11.98m, doc.RootElement.GetProperty("request").GetProperty("PaymentLines")[0].GetProperty("Amount").GetDecimal());
+    }
+
+    [Fact]
+    public void BuildUpdateRequest_rejects_a_zero_payment_amount()
+    {
+        var existing = new PurchaseResponse { Number = 1, SupplierCode = "S" };
+
+        var created = Assert.Throws<ArgumentException>(() => PurchasePaymentLines.BuildUpdateRequest(
+            existing,
+            [
+                new PurchasePaymentLines.PaymentLineEdit
+                {
+                    Date = new DateTime(2026, 4, 2),
+                    Amount = 0m,
+                    AccountId = 8,
+                    Method = 3,
+                },
+            ],
+            replaceAll: true));
+        Assert.Contains("non-zero", created.Message, StringComparison.Ordinal);
+
+        var edited = Assert.Throws<ArgumentException>(() => PurchasePaymentLines.BuildUpdateRequest(
+            new PurchaseResponse
+            {
+                Number = 1,
+                PaymentLines = [new PurchasePaymentLineResponse { Id = 4, Date = "2026-01-01", Amount = 5m, AccountId = 1, Method = 1 }],
+            },
+            [new PurchasePaymentLines.PaymentLineEdit { Id = 4, Amount = 0.004m }],
+            replaceAll: false));
+        Assert.Contains("non-zero", edited.Message, StringComparison.Ordinal);
     }
 }

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using KashFlow;
 using KashflowMCP.Tools;
 using Microsoft.Extensions.Configuration;
@@ -24,6 +25,111 @@ public class ReceiptPaymentMapperTests
         Assert.Equal(3, payment.PayMethod);
         Assert.Equal(8, payment.PayAccount);
         Assert.Equal("paid", payment.PayNote);
+    }
+
+    [Fact]
+    public void Create_keeps_a_negative_credit_note_amount()
+    {
+        var payment = ReceiptPaymentMapper.Create(
+            4026,
+            new DateTime(2026, 4, 2),
+            -11.98m,
+            paymentMethodId: 3,
+            bankAccountId: 8,
+            note: "KF04026");
+
+        Assert.Equal(4026, payment.PayInvoice);
+        Assert.Equal(-11.98m, payment.PayAmount);
+        Assert.Equal(3, payment.PayMethod);
+        Assert.Equal(8, payment.PayAccount);
+    }
+
+    [Fact]
+    public void Create_rejects_exactly_zero()
+    {
+        var error = Assert.Throws<ArgumentException>(() => ReceiptPaymentMapper.Create(
+            4026,
+            new DateTime(2026, 4, 2),
+            0m,
+            paymentMethodId: 3,
+            bankAccountId: 8,
+            note: null));
+
+        Assert.Contains("non-zero", error.Message, StringComparison.Ordinal);
+        Assert.Contains("PaidIn", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Bank_line_preview_names_paid_in_for_a_negative_amount()
+    {
+        var paidIn = ReceiptPaymentBankLine.Describe(-11.98m);
+        Assert.Equal(-11.98m, paidIn.Amount);
+        Assert.Equal("PaidIn", paidIn.BankLine);
+        Assert.Equal("in", paidIn.MoneyDirection);
+        Assert.Contains("money in", paidIn.BankLineNote, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("-11.98", paidIn.BankLineNote, StringComparison.Ordinal);
+
+        var paidOut = ReceiptPaymentBankLine.Describe(11.98m);
+        Assert.Equal("PaidOut", paidOut.BankLine);
+        Assert.Equal("out", paidOut.MoneyDirection);
+    }
+
+    [Fact]
+    public async Task InsertReceiptPayment_dry_run_shows_credit_note_as_paid_in_without_writing()
+    {
+        using var session = KashFlowSession.FromConfiguration(new ConfigurationBuilder().Build());
+        var tools = new WriteTools(session, new McpRuntimeOptions(true));
+
+        var json = await tools.InsertReceiptPayment(
+            4026,
+            new DateTime(2026, 4, 2),
+            -11.98m,
+            paymentMethodId: 3,
+            bankAccountId: 8,
+            note: "credit note",
+            dryRun: true);
+
+        using var doc = JsonDocument.Parse(json);
+        Assert.True(doc.RootElement.GetProperty("dryRun").GetBoolean());
+        Assert.Equal("SOAP InsertReceiptPayment", doc.RootElement.GetProperty("operation").GetString());
+        Assert.Equal(-11.98m, doc.RootElement.GetProperty("amount").GetDecimal());
+        Assert.Equal(-11.98m, doc.RootElement.GetProperty("payAmount").GetDecimal());
+        Assert.Equal(4026, doc.RootElement.GetProperty("receiptNumber").GetInt32());
+        Assert.Equal(8, doc.RootElement.GetProperty("payAccount").GetInt32());
+        Assert.Equal(3, doc.RootElement.GetProperty("payMethod").GetInt32());
+        Assert.Equal("PaidIn", doc.RootElement.GetProperty("bankLine").GetString());
+        Assert.Equal("in", doc.RootElement.GetProperty("moneyDirection").GetString());
+        var note = doc.RootElement.GetProperty("bankLineNote").GetString();
+        Assert.Contains("PaidIn", note, StringComparison.Ordinal);
+        Assert.Contains("money in", note, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("-11.98", note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InsertReceiptPayment_dry_run_rejects_zero_and_labels_a_positive_amount_paid_out()
+    {
+        using var session = KashFlowSession.FromConfiguration(new ConfigurationBuilder().Build());
+        var tools = new WriteTools(session, new McpRuntimeOptions(true));
+
+        var zero = await Assert.ThrowsAsync<ArgumentException>(() => tools.InsertReceiptPayment(
+            10,
+            new DateTime(2026, 1, 1),
+            0m,
+            paymentMethodId: 1,
+            bankAccountId: 2,
+            dryRun: true));
+        Assert.Contains("non-zero", zero.Message, StringComparison.Ordinal);
+
+        var json = await tools.InsertReceiptPayment(
+            10,
+            new DateTime(2026, 1, 1),
+            5m,
+            paymentMethodId: 1,
+            bankAccountId: 2,
+            dryRun: true);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(5m, doc.RootElement.GetProperty("payAmount").GetDecimal());
+        Assert.Equal("PaidOut", doc.RootElement.GetProperty("bankLine").GetString());
     }
 
     [Fact]
